@@ -1,474 +1,265 @@
 // entry/src/main/ets/pages/IDELayout.ets
-
 import WebTerminal from '../components/WebTerminal';
 import { webview } from '@kit.ArkWeb';
 import { FileTree, FileNode } from '../components/FileTree';
 import { EditorTabs, EditorTab } from '../components/EditorTabs';
 import { common } from '@kit.AbilityKit';
-import fs from '@ohos.file.fs';
-import util from '@ohos.util';
-import wifiManager from '@ohos.wifiManager';
+import promptAction from '@ohos.promptAction';
 
-interface SampleFile {
-  path: string;
-  content: string;
-}
+import { HostFileService } from '../services/HostFileService';
+import { FileTreeManager } from '../services/FileTreeManager';
+import { TabManager } from '../services/TabManager';
+import { EditorController } from '../services/EditorController';
+import { StatusBarManager, StatusBarInfo } from '../services/StatusBarManager';
 
-interface ArkTSService {
-  onEditorReady: () => void;
-  onContentChange: (content: string) => void;
-  onCursorChange: (line: string, col: string) => void;
-  onEditorBlur: (content: string) => void;
-  log: (msg: string) => void;
-}
+import { QemuAgentManager } from '../lib/QemuAgentManager';
+import { QemuFileSystem } from '../lib/QemuFileSystem';
+import { QemuAgent } from '../lib/QemuAgent';
 
 @Component
 export struct IdeLayout {
-
-  private sideBarWidth: number = 240;
-  private dividerWidth: number = 6;
-  private dividerHeight: number = 2;
-
+  // ---------- UI 状态变量 ----------
   @State isShowSideBar: boolean = true;
-  @State editorContent: string = '';
-  @State isEditorReady: boolean = false;
-
   @State fileTreeData: FileNode[] = [];
-  @State selectedTreePath: string = '';
-
-  @State openedTabs: EditorTab[] = [];
-  @State activeTabPath: string = '';
-
-  @State tabVersion: number = 0;
   @State folderVersion: number = 0;
-
+  @State selectedTreePath: string = '';
+  @State openedTabs: EditorTab[] = [];
+  @State tabVersion: number = 0;
+  @State activeTabPath: string = '';
+  @State editorContent: string = '';
   @State currentLine: number = 1;
   @State currentColumn: number = 1;
   @State currentFileType: string = '';
-  @State currentEncoding: string = 'UTF-8';
   @State currentFilePath: string = '';
-  @State currentLineEnding: string = 'LF';
-  @State currentTime: string = '';
   @State lastModifiedTime: string = '';
+  @State currentTime: string = '';
   @State wifiName: string = 'WiFi';
   @State wifiStatus: number = 0;
 
+  @State useQemuFs: boolean = true;
+  @State currentQemuPath: string = '/';
+
+  // ---------- 管理器实例 ----------
+  private hostFileService: HostFileService = new HostFileService();
+  private fileTreeManager: FileTreeManager = new FileTreeManager();
+  private tabManager: TabManager = new TabManager();
+  private editorController!: EditorController;
+  private statusBarManager: StatusBarManager = new StatusBarManager();
+
   private webController: webview.WebviewController = new webview.WebviewController();
-  private workDir: string = '';
+  private qemuFs: QemuFileSystem = new QemuFileSystem();
 
-  private pendingEditorContent: string = '';
-  private pendingEditorLanguage: string = 'plaintext';
-  private hasPendingEditorContent: boolean = false;
-  private hasPendingEditorLanguage: boolean = false;
-  private timeTimerId: number = -1;
-
+  // ---------- 生命周期 ----------
   aboutToAppear(): void {
-    this.initializeWorkDirectory();
-    this.createSampleFiles();
-    this.loadFileTree(this.workDir);
-    this.updateTime();
-    this.getWifiInfo();
+    console.info('======= IDELayout aboutToAppear 开始执行 =======');
+    const context = getContext(this) as common.UIAbilityContext;
+    this.hostFileService.initializeWorkDirectory(context);
+    this.hostFileService.createSampleFiles();
 
-    this.timeTimerId = setInterval(() => {
-      this.updateTime();
-    }, 60000);
+    this.editorController = new EditorController(this.webController);
+    this.editorController.onCursorChanged = (line: number, col: number): void => {
+      this.currentLine = line;
+      this.currentColumn = col;
+    };
+    this.editorController.onContentChanged = (content: string): void => {
+      this.editorContent = content;
+    };
+    this.editorController.onEditorBlurred = (content: string): void => {
+      this.editorContent = content;
+      this.saveCurrentFile();
+    };
 
-    const defaultFile = this.workDir + '/src/main.ets';
+    this.fileTreeManager.onDataChanged = (nodes: FileNode[], version: number): void => {
+      this.fileTreeData = nodes;
+      this.folderVersion = version;
+    };
+    const workDir = this.hostFileService.getWorkDir();
+    this.fileTreeManager.loadRootDirectory(workDir);
+
+    this.tabManager.onTabsChanged = (tabs: EditorTab[]): void => {
+      this.openedTabs = tabs;
+      this.tabVersion++;
+    };
+    this.tabManager.onActiveTabChanged = (path: string): void => {
+      this.activeTabPath = path;
+      this.selectedTreePath = path;
+      if (path) {
+        this.loadFileContent(path);
+      } else {
+        this.showEmptyState();
+      }
+    };
+
+    this.statusBarManager.onStatusChanged = (info: StatusBarInfo): void => {
+      this.currentTime = info.currentTime;
+      this.wifiName = info.wifiName;
+      this.wifiStatus = info.wifiStatus;
+    };
+    this.statusBarManager.startTimer();
+
+    const defaultFile = workDir + '/src/main.ets';
     try {
-      fs.statSync(defaultFile);
-      console.info('📌 默认打开示例文件:', defaultFile);
-      setTimeout(() => {
-        this.openFile(defaultFile);
+      this.hostFileService.readFile(defaultFile);
+      setTimeout((): void => {
+        this.tabManager.openFile(defaultFile);
       }, 300);
     } catch (e) {
       console.warn('⚠️ 默认示例文件不存在:', defaultFile);
-      const fallbackFile = this.workDir + '/README.md';
+      const fallbackFile = workDir + '/README.md';
       try {
-        fs.statSync(fallbackFile);
-        console.info('📌 回退打开 README.md');
-        setTimeout(() => {
-          this.openFile(fallbackFile);
+        this.hostFileService.readFile(fallbackFile);
+        setTimeout((): void => {
+          this.tabManager.openFile(fallbackFile);
         }, 300);
       } catch (e2) {
         console.warn('⚠️ 没有找到任何示例文件');
       }
     }
+
+    console.info('准备获取 QemuAgent...');
+    this.acquireAgentWithRetry();
   }
 
   aboutToDisappear(): void {
-    if (this.timeTimerId !== -1) {
-      clearInterval(this.timeTimerId);
-      this.timeTimerId = -1;
-    }
+    this.statusBarManager.stopTimer();
     this.saveCurrentFile();
+    QemuAgentManager.release('IDELayout')
+      .catch((err: Error) => console.error('[IDELayout] release agent error:', err));
   }
 
-  private initializeWorkDirectory(): void {
-    try {
-      const context = getContext(this) as common.UIAbilityContext;
-      this.workDir = context.filesDir;
-      console.info('📂 工作目录:', this.workDir);
-    } catch (e) {
-      console.error('❌ 获取上下文失败:', e);
-      this.workDir = '/data/storage/el2/base/haps/entry/files';
-    }
-  }
+  // ---------- Qemu Agent 重试获取（强制每次重新连接） ----------
+  private acquireAgentWithRetry(maxRetries: number = 30, delayMs: number = 2000): void {
+    let attempt = 0;
+    const tryAcquire = (): void => {
+      attempt++;
+      console.info(`[IDELayout] 尝试获取 QemuAgent (${attempt}/${maxRetries})...`);
 
-  private getWifiInfo(): void {
-    try {
-      wifiManager.getLinkedInfo().then((info: wifiManager.WifiLinkedInfo) => {
-        if (!info) {
-          this.wifiName = '无WiFi';
-          this.wifiStatus = 2;
-          return;
-        }
-        this.wifiName = info.ssid || 'WiFi';
-        const rssi = info.rssi ?? -100;
-        if (rssi > -50) this.wifiStatus = 0;
-        else if (rssi > -70) this.wifiStatus = 1;
-        else this.wifiStatus = 2;
-      }).catch(() => {
-        this.wifiName = '无WiFi';
-        this.wifiStatus = 2;
-      });
-    } catch (e) {
-      this.wifiName = '无WiFi';
-      this.wifiStatus = 2;
-    }
-  }
-
-  private createSampleFiles(): void {
-    const sampleFiles: SampleFile[] = [
-      {
-        path: this.workDir + '/src/main.ets',
-        content: `// main.ets\n// HiSH-IDE 示例项目\n// ArkTS 应用入口\n\nimport { UIAbility } from '@kit.AbilityKit';\n\nexport default class MainAbility extends UIAbility {\n  onCreate(): void {\n    console.info('HiSH-IDE 应用启动');\n  }\n  onDestroy(): void {\n    console.info('HiSH-IDE 应用退出');\n  }\n}\n`
-      },
-      {
-        path: this.workDir + '/README.md',
-        content: `# HiSH-IDE\n\n这是一个运行在 HarmonyOS 平台上的轻量级 IDE 示例项目。\n\n## 功能\n\n- 文件树\n- Monaco 代码编辑器\n- 多文件 Tab\n- 文件保存\n- 终端模拟器\n\n## 使用方式\n\n点击左侧文件即可在中间编辑器打开。\n`
-      },
-      {
-        path: this.workDir + '/utils/helper.ets',
-        content: `// helper.ets\n// 工具函数\n\nexport function add(a: number, b: number): number {\n  return a + b;\n}\n\nexport function multiply(a: number, b: number): number {\n  return a * b;\n}\n`
-      },
-      {
-        path: this.workDir + '/config.json',
-        content: `{\n  "name": "HiSH-IDE",\n  "version": "1.0.0",\n  "platform": "HarmonyOS",\n  "editor": "Monaco"\n}\n`
-      }
-    ];
-
-    for (const file of sampleFiles) {
-      try {
-        fs.statSync(file.path);
-        continue;
-      } catch (e) {
-        const dir = file.path.substring(0, file.path.lastIndexOf('/'));
-        try {
-          fs.statSync(dir);
-        } catch (e) {
-          fs.mkdirSync(dir);
-        }
-        let fd: number = -1;
-        try {
-          const f = fs.openSync(file.path, fs.OpenMode.READ_WRITE | fs.OpenMode.CREATE | fs.OpenMode.TRUNC);
-          fd = f.fd;
-          fs.writeSync(fd, file.content);
-          console.info('✅ 创建示例文件:', file.path);
-        } catch (err) {
-          console.error('❌ 创建示例文件失败:', file.path, err);
-        } finally {
-          if (fd !== -1) fs.closeSync(fd);
-        }
-      }
-    }
-  }
-
-  private loadFileTree(path: string): void {
-    try {
-      const files: string[] = fs.listFileSync(path);
-      const nodes: FileNode[] = [];
-      for (const name of files) {
-        const fullPath = path + '/' + name;
-        let isDir = false;
-        try {
-          const stat = fs.statSync(fullPath);
-          isDir = stat.isDirectory();
-        } catch (e) {}
-        const shouldExpand = isDir && (name === 'src' || name === 'utils');
-        nodes.push({
-          name: name,
-          isDir: isDir,
-          path: fullPath,
-          isExpanded: shouldExpand,
-          children: isDir ? [] : undefined
+      QemuAgentManager.release('IDELayout')
+        .catch(() => {})
+        .finally(() => {
+          QemuAgentManager.acquire('IDELayout')
+            .then((agent: QemuAgent | null) => {
+              if (agent) {
+                this.qemuFs.bindAgent(agent);
+                console.info(`[IDELayout] ✅ QemuAgent 获取成功 (尝试 ${attempt} 次)`);
+                if (this.useQemuFs) {
+                  this.loadFileTreeFromQemu('/');
+                }
+                return;
+              } else {
+                console.warn(`[IDELayout] agent 为 null (尝试 ${attempt}/${maxRetries})，${delayMs}ms 后重试...`);
+                if (attempt < maxRetries) {
+                  setTimeout(tryAcquire, delayMs);
+                } else {
+                  console.error(`[IDELayout] ❌ 经过 ${maxRetries} 次尝试，仍无法获取 QemuAgent`);
+                  promptAction.showToast({
+                    message: '无法连接到虚拟机 QGA，请检查虚拟机状态',
+                    duration: 3000
+                  });
+                }
+              }
+            })
+            .catch((err: Error) => {
+              console.error(`[IDELayout] acquire 异常 (尝试 ${attempt}/${maxRetries}):`, err);
+              if (attempt < maxRetries) {
+                setTimeout(tryAcquire, delayMs);
+              }
+            });
         });
-      }
-      this.sortFileNodes(nodes);
+    };
+
+    tryAcquire();
+  }
+
+  // ---------- Qemu 文件树加载 ----------
+  private async loadFileTreeFromQemu(path: string = '/'): Promise<void> {
+    if (!this.qemuFs.isReady()) {
+      console.warn('[IDELayout] QemuAgent 未就绪，无法加载 Qemu 文件树');
+      return;
+    }
+    try {
+      const nodes: FileNode[] = await this.qemuFs.listDirectory(path);
+      console.info('[IDELayout] Qemu 文件树加载完成，节点数:', nodes.length);
       this.fileTreeData = nodes;
       this.folderVersion++;
+      this.currentQemuPath = path;
+    } catch (err) {
+      console.error('[IDELayout] 加载 Qemu 文件树失败:', err);
+    }
+  }
 
+  // ---------- Qemu 目录切换 ----------
+  private toggleQemuDirectory(path: string): void {
+    const updateNode = (nodes: FileNode[]): boolean => {
       for (const node of nodes) {
-        if (node.isDir && node.isExpanded) {
-          this.loadSubDirectory(node.path);
-        }
-      }
-      console.info('✅ 根目录加载完成:', nodes.length);
-    } catch (err) {
-      console.error('❌ 读取目录失败:', err);
-      this.fileTreeData = [];
-    }
-  }
-
-  private loadSubDirectory(path: string): void {
-    try {
-      const files: string[] = fs.listFileSync(path);
-      const children: FileNode[] = [];
-      for (const name of files) {
-        const fullPath = path + '/' + name;
-        let isDir = false;
-        try {
-          const stat = fs.statSync(fullPath);
-          isDir = stat.isDirectory();
-        } catch (e) {}
-        children.push({
-          name: name,
-          isDir: isDir,
-          path: fullPath,
-          isExpanded: false,
-          children: isDir ? [] : undefined
-        });
-      }
-      this.sortFileNodes(children);
-
-      const updatedTree = this.cloneFileNodes(this.fileTreeData);
-      const success = this.setChildrenForPath(updatedTree, path, children);
-      if (success) {
-        this.fileTreeData = updatedTree;
-        this.folderVersion++;
-        console.info('📂 子目录加载完成:', path, children.length);
-      }
-    } catch (err) {
-      console.error('❌ 加载子目录失败:', path, err);
-    }
-  }
-
-  private setChildrenForPath(nodes: FileNode[], targetPath: string, children: FileNode[]): boolean {
-    for (const node of nodes) {
-      if (node.path === targetPath) {
-        node.children = children;
-        return true;
-      }
-      if (node.children && node.children.length > 0) {
-        if (this.setChildrenForPath(node.children, targetPath, children)) return true;
-      }
-    }
-    return false;
-  }
-
-  private cloneFileNodes(nodes: FileNode[]): FileNode[] {
-    const result: FileNode[] = [];
-    for (const node of nodes) {
-      result.push({
-        name: node.name,
-        path: node.path,
-        isDir: node.isDir,
-        isExpanded: node.isExpanded,
-        children: node.children ? this.cloneFileNodes(node.children) : undefined
-      });
-    }
-    return result;
-  }
-
-  private sortFileNodes(nodes: FileNode[]): void {
-    nodes.sort((a, b) => {
-      if (a.isDir && !b.isDir) return -1;
-      if (!a.isDir && b.isDir) return 1;
-      return a.name.localeCompare(b.name);
-    });
-  }
-
-  private toggleDir(path: string): void {
-    const updatedTree = this.cloneFileNodes(this.fileTreeData);
-    const node = this.findNodeByPath(updatedTree, path);
-    if (!node) return;
-    node.isExpanded = !node.isExpanded;
-    this.fileTreeData = updatedTree;
-    this.folderVersion++;
-    if (node.isExpanded && (!node.children || node.children.length === 0)) {
-      this.loadSubDirectory(path);
-    }
-  }
-
-  private findNodeByPath(nodes: FileNode[], path: string): FileNode | undefined {
-    for (const node of nodes) {
-      if (node.path === path) return node;
-      if (node.children && node.children.length > 0) {
-        const result = this.findNodeByPath(node.children, path);
-        if (result) return result;
-      }
-    }
-    return undefined;
-  }
-
-  private updateTime(): void {
-    const now = new Date();
-    this.currentTime = String(now.getHours()).padStart(2, '0') + ':' + String(now.getMinutes()).padStart(2, '0');
-  }
-
-  private arkTSService: ArkTSService = {
-    onEditorReady: (): void => {
-      console.info('✅ Monaco Editor Ready');
-      this.isEditorReady = true;
-      if (this.hasPendingEditorContent || this.hasPendingEditorLanguage) {
-        const content = this.hasPendingEditorContent ? this.pendingEditorContent : '';
-        const language = this.hasPendingEditorLanguage ? this.pendingEditorLanguage : this.getLanguageFromPath(this.activeTabPath);
-        this.hasPendingEditorContent = false;
-        this.hasPendingEditorLanguage = false;
-        this.pendingEditorContent = '';
-        this.pendingEditorLanguage = 'plaintext';
-        this.applyEditorToMonaco(content, language);
-      }
-      this.triggerLayout();
-    },
-    onContentChange: (content: string): void => {
-      this.editorContent = content;
-    },
-    onCursorChange: (line: string, col: string): void => {
-      this.currentLine = parseInt(line, 10) || 1;
-      this.currentColumn = parseInt(col, 10) || 1;
-    },
-    onEditorBlur: (content: string): void => {
-      this.editorContent = content;
-      this.saveCurrentFile();
-    },
-    log: (msg: string): void => {
-      console.info('📢 [Monaco]:', msg);
-    }
-  };
-
-  // ====== 核心修改：使用 forceSetContent 强制覆盖 ======
-  private applyEditorToMonaco(content: string, language: string): void {
-    if (!this.webController) {
-      console.error('❌ WebView Controller 不存在');
-      return;
-    }
-    const safeContent = JSON.stringify(content);
-    const safeLanguage = JSON.stringify(language);
-    // 优先使用 forceSetContent（直接操作 model），不存在则回退到 setEditorContent
-    const jsCode = `
-      (function() {
-        try {
-          if (typeof window.forceSetContent === 'function') {
-            window.forceSetContent(${safeContent}, ${safeLanguage});
-            return true;
-          } else if (typeof window.setEditorContent === 'function') {
-            window.setEditorContent(${safeContent}, ${safeLanguage});
-            return true;
-          } else {
-            console.error('没有可用的设置内容方法');
-            return false;
+        if (node.path === path) {
+          node.isExpanded = !node.isExpanded;
+          if (node.isExpanded && (!node.children || node.children.length === 0)) {
+            this.qemuFs.listDirectory(path).then((children: FileNode[]): void => {
+              if (children) {
+                node.children = children;
+                this.fileTreeData = [...this.fileTreeData];
+                this.folderVersion++;
+              }
+            }).catch((err: Error): void => {
+              console.error('[IDELayout] 加载子目录失败:', path, err);
+            });
           }
-        } catch (e) {
-          console.error('写入 Monaco 失败:', e);
-          return false;
+          return true;
         }
-      })();
-    `;
-    console.info('📤 → Monaco:', 'path=' + this.currentFilePath, 'language=' + language, 'length=' + content.length);
-    const preview = content.substring(0, 50) + (content.length > 50 ? '...' : '');
-    console.info('📄 内容预览:', preview);
-    this.webController.runJavaScript(jsCode, (err: Error | null) => {
-      if (err) console.error('❌ Monaco JS 执行失败:', err.message);
-      else console.info('✅ Monaco 内容写入成功');
-    });
+        if (node.children && node.children.length > 0) {
+          if (updateNode(node.children)) return true;
+        }
+      }
+      return false;
+    };
+    const newData: FileNode[] = [...this.fileTreeData];
+    updateNode(newData);
+    this.fileTreeData = newData;
+    this.folderVersion++;
   }
 
-  setEditorContent(content: string, language: string = 'plaintext'): void {
-    this.editorContent = content;
-    if (!this.isEditorReady) {
-      this.pendingEditorContent = content;
-      this.pendingEditorLanguage = language;
-      this.hasPendingEditorContent = true;
-      this.hasPendingEditorLanguage = true;
-      console.info('⏳ Monaco 未 Ready，暂存文件:', 'length=' + content.length, 'language=' + language);
+  // ---------- UI 事件处理 ----------
+  private handleDirToggle(path: string): void {
+    if (this.useQemuFs && this.qemuFs.isReady()) {
+      this.toggleQemuDirectory(path);
+    } else {
+      this.fileTreeManager.toggleDirectory(path);
+    }
+  }
+
+  private onFileClick(path: string): void {
+    if (this.useQemuFs && this.qemuFs.isReady()) {
+      console.warn('[IDELayout] Qemu 文件打开功能尚未实现');
+      promptAction.showToast({
+        message: 'Qemu 文件打开功能开发中',
+        duration: 2000
+      });
       return;
     }
-    this.applyEditorToMonaco(content, language);
+    this.tabManager.openFile(path);
   }
 
-  private showEmptyState(): void {
-    const content = '// 点击左侧文件树中的文件开始编辑';
-    this.currentFilePath = '';
-    this.currentFileType = '';
-    this.lastModifiedTime = '';
-    this.editorContent = content;
-    this.applyEditorToMonaco(content, 'typescript');
+  private onDirToggle(path: string): void {
+    this.handleDirToggle(path);
   }
 
-  private readFileContent(path: string): string {
-    let fd: number = -1;
-    try {
-      const f = fs.openSync(path, fs.OpenMode.READ_ONLY);
-      fd = f.fd;
-      const stat = fs.statSync(path);
-      const buffer = new ArrayBuffer(stat.size);
-      fs.readSync(fd, buffer);
-      const decoder = new util.TextDecoder('utf-8');
-      return decoder.decode(new Uint8Array(buffer));
-    } catch (err) {
-      console.error('❌ 读取文件失败:', path, err);
-      throw new Error(String(err));
-    } finally {
-      if (fd !== -1) fs.closeSync(fd);
+  private onTabSwitch(path: string): void {
+    this.tabManager.switchTab(path);
+  }
+
+  private onTabClose(path: string): void {
+    const newActive: string | undefined = this.tabManager.closeTab(path);
+    if (!newActive) {
+      this.showEmptyState();
     }
   }
 
-  private writeFileContent(path: string, content: string): void {
-    let fd: number = -1;
-    try {
-      const f = fs.openSync(path, fs.OpenMode.READ_WRITE | fs.OpenMode.CREATE | fs.OpenMode.TRUNC);
-      fd = f.fd;
-      fs.writeSync(fd, content);
-    } catch (err) {
-      console.error('❌ 写入文件失败:', path, err);
-      throw new Error(String(err));
-    } finally {
-      if (fd !== -1) fs.closeSync(fd);
-    }
+  private triggerLayout(): void {
+    this.editorController.triggerLayout();
   }
 
-  private getDemoContent(path: string): string {
-    const fileName = path.split('/').pop() || '';
-    const ext = path.split('.').pop()?.toLowerCase() || '';
-    const exactDemos: Record<string, string> = {
-      'main.ets': `// main.ets\n// HiSH-IDE 示例代码\n\nimport { UIAbility } from '@kit.AbilityKit';\n\nexport default class MainAbility extends UIAbility {\n  onCreate(): void {\n    console.info('应用已启动');\n  }\n}\n`,
-      'helper.ets': `// helper.ets\n\nexport function add(a: number, b: number): number {\n  return a + b;\n}\n`,
-      'readme.md': `# HiSH-IDE\n\nHarmonyOS IDE 示例项目。\n\n点击左侧文件查看代码。\n`,
-      'config.json': `{\n  "name": "HiSH-IDE",\n  "version": "1.0.0"\n}\n`
-    };
-    const lowerFileName = fileName.toLowerCase();
-    for (const key of Object.keys(exactDemos)) {
-      if (lowerFileName === key.toLowerCase()) return exactDemos[key];
-    }
-    switch (ext) {
-      case 'ets': return `// ${fileName}\n\n@Component\nexport struct ${this.safeIdentifier(fileName)} {\n  build() {\n    Column() {\n      Text('${fileName}')\n        .fontSize(20)\n    }\n  }\n}\n`;
-      case 'ts': return `// ${fileName}\n\nexport function hello(): string {\n  return 'Hello from ${fileName}';\n}\n`;
-      case 'js': return `// ${fileName}\n\nfunction hello() {\n  console.log('Hello from ${fileName}');\n}\n`;
-      case 'json': return `{\n  "file": "${fileName}",\n  "type": "json"\n}\n`;
-      case 'py': return `# ${fileName}\n\ndef main():\n    print("Hello from ${fileName}")\n\nif __name__ == "__main__":\n    main()\n`;
-      case 'md': return `# ${fileName}\n\n这是一个示例 Markdown 文件。\n`;
-      default: return `// ${fileName}\n\n// 请编辑此文件\n`;
-    }
-  }
-
-  private safeIdentifier(fileName: string): string {
-    const base = fileName.replace(/\.[^.]+$/, '');
-    const clean = base.replace(/[^a-zA-Z0-9_]/g, '_');
-    if (!clean) return 'Example';
-    if (/^[0-9]/.test(clean)) return '_' + clean;
-    return clean;
-  }
-
+  // ---------- 核心业务方法 ----------
   private loadFileContent(path: string): void {
     console.info('📂 loadFileContent:', path);
     if (!path) {
@@ -477,7 +268,7 @@ export struct IdeLayout {
     }
     this.currentFilePath = path;
 
-    const ext = path.split('.').pop()?.toLowerCase() || '';
+    const ext: string = path.split('.').pop()?.toLowerCase() || '';
     const typeMap: Record<string, string> = {
       'ets': 'ArkTS', 'ts': 'TypeScript', 'js': 'JavaScript',
       'json': 'JSON', 'html': 'HTML', 'css': 'CSS',
@@ -487,162 +278,69 @@ export struct IdeLayout {
     this.currentFileType = typeMap[ext] || 'Plain Text';
 
     let content: string = '';
-    let fileExists = false;
+    let fileExists: boolean = false;
     try {
-      content = this.readFileContent(path);
+      content = this.hostFileService.readFile(path);
       fileExists = true;
       console.info('✅ 真实文件读取成功:', path, 'length=' + content.length);
     } catch (err) {
       console.warn('⚠️ 真实文件读取失败，使用示例内容:', path);
-      content = this.getDemoContent(path);
+      content = this.hostFileService.getDemoContent(path);
     }
 
     this.editorContent = content;
-    const language = this.getLanguageFromPath(path);
-    // 直接调用 applyEditorToMonaco（内部会使用 forceSetContent）
-    this.applyEditorToMonaco(content, language);
+    const language: string = EditorController.getLanguageFromPath(path);
+    this.editorController.setContent(content, language);
 
     if (fileExists) {
-      try {
-        const stat = fs.statSync(path);
-        const mtime = new Date(stat.mtime);
-        this.lastModifiedTime =
-          String(mtime.getHours()).padStart(2, '0') + ':' +
-          String(mtime.getMinutes()).padStart(2, '0') + ':' +
-          String(mtime.getSeconds()).padStart(2, '0') + ' ' +
-          mtime.getFullYear() + '-' +
-          String(mtime.getMonth() + 1).padStart(2, '0') + '-' +
-          String(mtime.getDate()).padStart(2, '0');
-      } catch (e) { this.lastModifiedTime = ''; }
+      this.lastModifiedTime = this.hostFileService.getLastModifiedTime(path);
     } else {
       this.lastModifiedTime = '';
     }
+
+    this.statusBarManager.setFileInfo(this.currentFileType, this.getDisplayPath(), this.lastModifiedTime);
   }
 
   private saveCurrentFile(): void {
-    if (!this.activeTabPath || !this.currentFilePath || this.currentFilePath !== this.activeTabPath) return;
+    if (!this.activeTabPath || !this.currentFilePath || this.currentFilePath !== this.activeTabPath) {
+      return;
+    }
     try {
-      this.writeFileContent(this.currentFilePath, this.editorContent);
-      const now = new Date();
-      this.lastModifiedTime =
-        String(now.getHours()).padStart(2, '0') + ':' +
-        String(now.getMinutes()).padStart(2, '0') + ':' +
-        String(now.getSeconds()).padStart(2, '0') + ' ' +
-        now.getFullYear() + '-' +
-        String(now.getMonth() + 1).padStart(2, '0') + '-' +
-        String(now.getDate()).padStart(2, '0');
+      const content: string = this.editorController.getCurrentContent();
+      this.hostFileService.writeFile(this.currentFilePath, content);
+      this.lastModifiedTime = this.hostFileService.getLastModifiedTime(this.currentFilePath);
+      this.statusBarManager.setLastModified(this.lastModifiedTime);
       console.info('💾 文件保存成功:', this.currentFilePath);
     } catch (err) {
       console.error('❌ 保存文件失败:', err);
     }
   }
 
-  private getLanguageFromPath(path: string): string {
-    const ext = path.split('.').pop()?.toLowerCase() || '';
-    const map: Record<string, string> = {
-      'ets': 'typescript', 'ts': 'typescript', 'js': 'javascript',
-      'json': 'json', 'html': 'html', 'css': 'css',
-      'xml': 'xml', 'py': 'python', 'java': 'java',
-      'c': 'c', 'cpp': 'cpp', 'go': 'go', 'md': 'markdown'
-    };
-    return map[ext] || 'plaintext';
-  }
-
-  openFile(path: string): void {
-    console.info('📂 openFile:', path);
-    if (!path) return;
-    this.selectedTreePath = path;
-    if (this.activeTabPath === path) return;
-
-    for (const tab of this.openedTabs) {
-      if (tab.path === path) {
-        this.switchTab(path);
-        return;
-      }
-    }
-
-    const name = path.split('/').pop() || path;
-    const updatedTabs: EditorTab[] = [];
-    for (const tab of this.openedTabs) {
-      updatedTabs.push({ path: tab.path, name: tab.name, isActive: false });
-    }
-    updatedTabs.push({ path: path, name: name, isActive: true });
-    this.openedTabs = updatedTabs;
-    this.tabVersion++;
-    this.activeTabPath = path;
-    this.loadFileContent(path);
-  }
-
-  switchTab(path: string): void {
-    if (this.activeTabPath === path) return;
-    this.saveCurrentFile();
-    this.selectedTreePath = path;
-    const updatedTabs: EditorTab[] = [];
-    for (const tab of this.openedTabs) {
-      updatedTabs.push({ path: tab.path, name: tab.name, isActive: tab.path === path });
-    }
-    this.openedTabs = updatedTabs;
-    this.tabVersion++;
-    this.activeTabPath = path;
-    this.loadFileContent(path);
-  }
-
-  closeTab(path: string): void {
-    let index = -1;
-    for (let i = 0; i < this.openedTabs.length; i++) {
-      if (this.openedTabs[i].path === path) { index = i; break; }
-    }
-    if (index === -1) return;
-    const wasActive = this.openedTabs[index].isActive;
-    if (wasActive) this.saveCurrentFile();
-
-    const newTabs = this.openedTabs.filter((_, i) => i !== index);
-    this.openedTabs = newTabs;
-    this.tabVersion++;
-
-    if (newTabs.length === 0) {
-      this.activeTabPath = '';
-      this.selectedTreePath = '';
-      this.showEmptyState();
-      return;
-    }
-
-    if (!wasActive) return;
-    let newIndex = index;
-    if (newIndex >= newTabs.length) newIndex = newTabs.length - 1;
-    const activeTab = newTabs[newIndex];
-    const updatedTabs: EditorTab[] = [];
-    for (let i = 0; i < newTabs.length; i++) {
-      updatedTabs.push({ path: newTabs[i].path, name: newTabs[i].name, isActive: i === newIndex });
-    }
-    this.openedTabs = updatedTabs;
-    this.tabVersion++;
-    this.activeTabPath = activeTab.path;
-    this.selectedTreePath = activeTab.path;
-    this.loadFileContent(activeTab.path);
-  }
-
-  triggerLayout(): void {
-    this.webController.runJavaScript(`
-      if (typeof window.triggerLayout === 'function') {
-        window.triggerLayout();
-      }
-    `);
+  private showEmptyState(): void {
+    const content: string = '// 点击左侧文件树中的文件开始编辑';
+    this.currentFilePath = '';
+    this.currentFileType = '';
+    this.lastModifiedTime = '';
+    this.editorContent = content;
+    this.editorController.setContent(content, 'typescript');
+    this.statusBarManager.setFileInfo('', '', '');
   }
 
   private getDisplayPath(): string {
     if (!this.currentFilePath) return '';
-    let path = this.currentFilePath;
-    if (this.workDir && path.startsWith(this.workDir)) {
-      path = path.substring(this.workDir.length);
+    let path: string = this.currentFilePath;
+    const workDir: string = this.hostFileService.getWorkDir();
+    if (workDir && path.startsWith(workDir)) {
+      path = path.substring(workDir.length);
       if (path.startsWith('/')) path = path.substring(1);
     }
-    const parts = path.split('/').filter(p => p !== '');
+    const parts: string[] = path.split('/').filter((p: string) => p !== '');
     if (parts.length === 0) return '';
     if (parts.length > 3) return '... > ' + parts.slice(-3).join(' > ');
     return parts.join(' > ');
   }
 
+  // ---------- UI 构建 ----------
   build() {
     Column() {
       Row() {
@@ -664,20 +362,20 @@ export struct IdeLayout {
               rootNodes: this.fileTreeData,
               selectedPath: this.selectedTreePath,
               version: this.folderVersion,
-              onFileClick: (path: string) => { this.openFile(path); },
-              onDirToggle: (path: string) => { this.toggleDir(path); }
+              onFileClick: (path: string) => { this.onFileClick(path); },
+              onDirToggle: (path: string) => { this.onDirToggle(path); }
             })
               .width('100%')
               .layoutWeight(1)
               .backgroundColor('#1e1e1e')
           }
-          .width(this.sideBarWidth)
+          .width(240)
           .height('100%')
           .backgroundColor('#1e1e1e')
         }
 
         Column()
-          .width(this.dividerWidth)
+          .width(6)
           .height('100%')
           .backgroundColor('#3a3a3a')
 
@@ -692,8 +390,8 @@ export struct IdeLayout {
             EditorTabs({
               tabs: this.openedTabs,
               version: this.tabVersion,
-              onTabSwitch: (path: string) => { this.switchTab(path); },
-              onTabClose: (path: string) => { this.closeTab(path); }
+              onTabSwitch: (path: string) => { this.onTabSwitch(path); },
+              onTabClose: (path: string) => { this.onTabClose(path); }
             })
               .layoutWeight(1)
               .height(36)
@@ -717,19 +415,20 @@ export struct IdeLayout {
                   permission: `{
                     "javascriptProxyPermission": {
                       "urlPermissionList": [
-                        { "scheme": "https", "host": "cdnjs.cloudflare.com", "port": "", "path": "" }
+                        { "scheme": "https", "host": "cdnjs.cloudflare.com", "port": "", "path": "" },
+                        { "scheme": "resource", "host": "rawfile", "port": "", "path": "" }
                       ]
                     }
                   }`,
-                  object: this.arkTSService,
+                  object: this.editorController.getArkTSService(),
                   name: 'arkTSService',
                   methodList: ['onEditorReady', 'onContentChange', 'onCursorChange', 'onEditorBlur', 'log'],
                   controller: this.webController
                 })
                 .onPageEnd(() => {
                   console.info('🌐 Monaco HTML 加载完成');
-                  setTimeout(() => {
-                    if (this.openedTabs.length > 0 && this.activeTabPath) {
+                  setTimeout((): void => {
+                    if (this.activeTabPath) {
                       this.loadFileContent(this.activeTabPath);
                     } else {
                       this.showEmptyState();
@@ -738,7 +437,7 @@ export struct IdeLayout {
                   }, 500);
                 })
                 .onErrorReceive((event: ESObject) => {
-                  let errorInfo = '未知错误';
+                  let errorInfo: string = '未知错误';
                   try {
                     const e = event as Record<string, ESObject>;
                     if (typeof e.getErrorInfo === 'function') errorInfo = String(e.getErrorInfo());
@@ -761,7 +460,7 @@ export struct IdeLayout {
                 .width('100%')
             }
             .width('100%')
-            .height(this.dividerHeight)
+            .height(2)
 
             Column() {
               WebTerminal({ virtKeyEnabled: false })
@@ -800,7 +499,7 @@ export struct IdeLayout {
         if (this.currentFileType) {
           Text(this.currentFileType).fontSize(12).fontColor('#cccccc').margin({ left: 10 })
         }
-        Text(this.currentEncoding).fontSize(12).fontColor('#cccccc').margin({ left: 10 })
+        Text('UTF-8').fontSize(12).fontColor('#cccccc').margin({ left: 10 })
         Text(this.getDisplayPath())
           .fontSize(12)
           .fontColor('#cccccc')
@@ -843,7 +542,7 @@ export struct IdeLayout {
         .margin({ right: 12 })
         .flexShrink(0)
 
-        Text(this.currentLineEnding).fontSize(12).fontColor('#cccccc').flexShrink(0)
+        Text('LF').fontSize(12).fontColor('#cccccc').flexShrink(0)
       }
       .padding({ right: 16 })
       .height('100%')
