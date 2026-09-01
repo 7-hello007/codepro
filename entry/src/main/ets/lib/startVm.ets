@@ -1,3 +1,5 @@
+// entry/src/main/ets/lib/startVm.ets
+
 import { fileIo as fs } from '@kit.CoreFileKit'
 import napi from 'libentry.so'
 import { defaultEmulator, PortMapping } from '../model/Emulator'

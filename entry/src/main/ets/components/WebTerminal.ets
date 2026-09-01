@@ -1,3 +1,5 @@
+// entry/src/main/ets/components/WebTerminal.ets
+
 import util from '@ohos.util';
 import { buffer } from '@kit.ArkTS';
 import { hilog } from '@kit.PerformanceAnalysisKit';

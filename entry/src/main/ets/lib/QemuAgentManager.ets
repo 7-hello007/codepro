@@ -1,3 +1,5 @@
+// entry/src/main/ets/lib/QemuAgentManager.ets
+
 import { hilog } from '@kit.PerformanceAnalysisKit'
 import QemuAgent from './QemuAgent'
 import appOption from '../model/appOption'
