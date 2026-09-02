@@ -1,6 +1,5 @@
 // entry/src/main/ets/services/StatusBarManager.ets
 import wifiManager from '@ohos.wifiManager';
-import wifi from '@ohos.wifi';
 import { BusinessError } from '@kit.BasicServicesKit';
 
 export interface StatusBarInfo {
@@ -16,9 +15,6 @@ export interface StatusBarInfo {
   wifiStatus: number; // 0=强,1=中,2=弱/无
 }
 
-/**
- * 状态栏管理器（负责时间和WiFi更新）
- */
 export class StatusBarManager {
   private info: StatusBarInfo = {
     line: 1,
@@ -33,7 +29,7 @@ export class StatusBarManager {
     wifiStatus: 2
   };
 
-  private timerId: number = -1;          // 时间定时器（60秒）
+  private timerId: number = -1;          // 时间定时器（1秒）
   private wifiTimerId: number = -1;      // WiFi定时器（30秒）
 
   onStatusChanged?: (info: StatusBarInfo) => void;
@@ -42,15 +38,17 @@ export class StatusBarManager {
     this.updateTime();
     this.updateWifi();
 
-    // 时间每分钟更新一次
+    // 时间每秒更新一次（显示秒）
     this.timerId = setInterval(() => {
       this.updateTime();
-    }, 60000);
+    }, 1000);
 
     // WiFi 每30秒更新一次
     this.wifiTimerId = setInterval(() => {
       this.updateWifi();
     }, 30000);
+
+    console.info('[StatusBar] 定时器已启动');
   }
 
   stopTimer(): void {
@@ -62,6 +60,7 @@ export class StatusBarManager {
       clearInterval(this.wifiTimerId);
       this.wifiTimerId = -1;
     }
+    console.info('[StatusBar] 定时器已停止');
   }
 
   updateCursor(line: number, col: number): void {
@@ -84,8 +83,10 @@ export class StatusBarManager {
 
   private updateTime(): void {
     const now = new Date();
-    this.info.currentTime =
-      String(now.getHours()).padStart(2, '0') + ':' + String(now.getMinutes()).padStart(2, '0');
+    const hh = String(now.getHours()).padStart(2, '0');
+    const mm = String(now.getMinutes()).padStart(2, '0');
+    const ss = String(now.getSeconds()).padStart(2, '0');
+    this.info.currentTime = `${hh}:${mm}:${ss}`;
     this.notify();
   }
 
@@ -96,6 +97,7 @@ export class StatusBarManager {
           this.info.wifiName = '无WiFi';
           this.info.wifiStatus = 2;
           this.notify();
+          console.info('[StatusBar] WiFi: 无连接');
           return;
         }
         this.info.wifiName = info.ssid || 'WiFi';
@@ -104,12 +106,15 @@ export class StatusBarManager {
         else if (rssi > -70) this.info.wifiStatus = 1;
         else this.info.wifiStatus = 2;
         this.notify();
-      }).catch(() => {
+        console.info(`[StatusBar] WiFi: ${this.info.wifiName}, RSSI=${rssi}`);
+      }).catch((err: BusinessError) => {
+        console.error('[StatusBar] WiFi 获取失败:', err.message);
         this.info.wifiName = '无WiFi';
         this.info.wifiStatus = 2;
         this.notify();
       });
     } catch (e) {
+      console.error('[StatusBar] WiFi 异常:', e);
       this.info.wifiName = '无WiFi';
       this.info.wifiStatus = 2;
       this.notify();
@@ -117,7 +122,6 @@ export class StatusBarManager {
   }
 
   getInfo(): StatusBarInfo {
-    // 显式构造新对象，避免对象展开
     return {
       line: this.info.line,
       column: this.info.column,

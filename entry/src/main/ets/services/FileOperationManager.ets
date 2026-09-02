@@ -54,11 +54,10 @@ export class FileOperationManager {
   async loadFileContent(path: string): Promise<void> {
     console.info('📂 loadFileContent:', path);
     if (!path) {
-      this.showEmptyState();
+      this.showEmptyState('未指定文件路径');
       return;
     }
 
-    // 判断文件类型
     const ext = path.split('.').pop()?.toLowerCase() || '';
     const typeMap: Record<string, string> = {
       'ets': 'ArkTS', 'ts': 'TypeScript', 'js': 'JavaScript',
@@ -72,59 +71,74 @@ export class FileOperationManager {
     let content: string | null = null;
     let fileExists = false;
     let lastModified = '';
+    let readError: Error | null = null;
 
     if (this.useQemuFs && this.qemuFs.isReady()) {
-      // ----- QEMU 模式：从虚拟机读取 -----
       try {
         content = await this.qemuFs.readFile(path);
+        // 关键：只要返回非 null，就认为文件存在（即使内容为空字符串）
         if (content !== null) {
           fileExists = true;
-          // QEMU 下暂时无法获取修改时间，留空或可考虑 stat 命令
+          // 如果内容为 null 但未抛异常，说明文件存在但读取失败？实际上 null 表示错误，我们视为不存在
         } else {
-          console.warn('⚠️ QEMU 读取文件失败:', path);
+          // 返回 null 表示读取失败（文件不存在或无法读取）
+          console.warn('⚠️ QEMU 读取文件失败（返回null）:', path);
+          readError = new Error('文件不存在或无法读取');
         }
       } catch (err) {
         console.error('❌ QEMU 读取异常:', err);
+        readError = err instanceof Error ? err : new Error(String(err));
       }
     } else {
-      // ----- 宿主模式（后备） -----
       try {
         content = this.hostFileService.readFile(path);
         fileExists = true;
         lastModified = this.hostFileService.getLastModifiedTime(path);
       } catch (err) {
-        console.warn('⚠️ 真实文件读取失败，使用示例内容:', path);
+        console.warn('⚠️ 宿主读取失败，使用示例内容:', path);
         content = this.hostFileService.getDemoContent(path);
+        // 对于宿主模式，即使失败也返回 demo 内容，视为存在
+        fileExists = true;
       }
     }
 
-    // 如果内容为空，显示空状态
-    if (content === null || content === undefined) {
-      this.editorController.showEmptyState('无法读取文件内容');
+    // 处理读取错误（仅当 QEMU 模式且未读取到内容）
+    if (readError) {
+      const errorMsg = `无法读取文件: ${path} – ${readError.message}`;
+      this.editorController.showEmptyState(errorMsg);
       this.statusBarManager.setFileInfo('', '', '');
-      if (this.onStateUpdate) {
-        this.onStateUpdate({
-          currentFilePath: path,
-          currentFileType: '',
-          editorContent: '',
-          lastModifiedTime: ''
-        });
-      }
+      this.updateState({ currentFilePath: path, currentFileType: '', editorContent: '', lastModifiedTime: '' });
+      // 注意：此时编辑器只读，无法编辑
       return;
     }
 
-    // 写入编辑器
-    this.editorController.setContent(content, language);
+    // 文件存在但内容为空字符串 或 有内容
+    // 注意：content 可能是 null（如果上面未处理），但我们已经处理了 readError，所以这里 content 不会是 null（除非宿主模式 demo 返回 null，但不会）
+    const contentStr = content ?? '';
+
+    // 写入编辑器（内容可以是空字符串）
+    this.editorController.setContent(contentStr, language);
     this.statusBarManager.setFileInfo(fileType, this.getDisplayPath(path), lastModified);
 
-    if (this.onStateUpdate) {
-      this.onStateUpdate({
-        currentFilePath: path,
-        currentFileType: fileType,
-        editorContent: content,
-        lastModifiedTime: lastModified
-      });
+    // 更新修改时间
+    if (fileExists && lastModified) {
+      this.statusBarManager.setLastModified(lastModified);
+    } else {
+      const now = new Date().toLocaleString('zh-CN', { hour12: false });
+      this.statusBarManager.setLastModified(now);
     }
+
+    this.updateState({
+      currentFilePath: path,
+      currentFileType: fileType,
+      editorContent: contentStr,
+      lastModifiedTime: lastModified || new Date().toLocaleString('zh-CN', { hour12: false })
+    });
+
+    // 注意：setContent 内部会根据内容是否为空调用 setReadOnly
+    // 但我们需要确保空内容时是可编辑的，所以强制取消只读
+    // 因为 fileExists 为 true，无论内容是否为空，都应可编辑
+    this.editorController.setReadOnly(false);
   }
 
   /**
@@ -137,12 +151,13 @@ export class FileOperationManager {
     let success = false;
 
     if (this.useQemuFs && this.qemuFs.isReady()) {
-      // ----- QEMU 模式：写入虚拟机 -----
       try {
         success = await this.qemuFs.writeFile(currentFilePath, content);
         if (success) {
           console.info('💾 QEMU 文件保存成功:', currentFilePath);
-          // 可考虑获取修改时间（暂略）
+          const now = new Date().toLocaleString('zh-CN', { hour12: false });
+          this.statusBarManager.setLastModified(now);
+          this.updateState({ lastModifiedTime: now });
         } else {
           console.error('❌ QEMU 保存失败:', currentFilePath);
         }
@@ -150,15 +165,12 @@ export class FileOperationManager {
         console.error('❌ QEMU 保存异常:', err);
       }
     } else {
-      // ----- 宿主模式 -----
       try {
         this.hostFileService.writeFile(currentFilePath, content);
         success = true;
         const lastModified = this.hostFileService.getLastModifiedTime(currentFilePath);
         this.statusBarManager.setLastModified(lastModified);
-        if (this.onStateUpdate) {
-          this.onStateUpdate({ lastModifiedTime: lastModified });
-        }
+        this.updateState({ lastModifiedTime: lastModified });
         console.info('💾 宿主文件保存成功:', currentFilePath);
       } catch (err) {
         console.error('❌ 宿主保存失败:', err);
@@ -166,30 +178,24 @@ export class FileOperationManager {
     }
 
     if (!success) {
-      // 保存失败时提示（可扩展 Toast）
       console.warn('⚠️ 文件保存未成功');
     }
   }
 
   /**
-   * 显示空状态（编辑器只读，显示提示信息）
+   * 显示空状态（真正的空状态，用于未打开文件或错误）
    */
   showEmptyState(message: string = '未打开任何文件'): void {
     this.editorController.showEmptyState(message);
     this.statusBarManager.setFileInfo('', '', '');
-    if (this.onStateUpdate) {
-      this.onStateUpdate({
-        currentFilePath: '',
-        currentFileType: '',
-        editorContent: '',
-        lastModifiedTime: ''
-      });
-    }
+    this.updateState({
+      currentFilePath: '',
+      currentFileType: '',
+      editorContent: '',
+      lastModifiedTime: ''
+    });
   }
 
-  /**
-   * 获取显示用的相对路径（与原有逻辑一致）
-   */
   getDisplayPath(path: string): string {
     if (!path) return '';
     const workDir = this.hostFileService.getWorkDir();
@@ -204,9 +210,6 @@ export class FileOperationManager {
     return parts.join(' > ');
   }
 
-  /**
-   * 刷新文件树（仅 QEMU 模式有效）
-   */
   refreshFileTree(): void {
     if (this.useQemuFs && this.qemuFs.isReady()) {
       this.qemuFileTreeService.refresh();
@@ -215,12 +218,13 @@ export class FileOperationManager {
     }
   }
 
-  /**
-   * 更新光标位置（透传）
-   */
   updateCursor(line: number, col: number): void {
+    this.updateState({ currentLine: line, currentColumn: col });
+  }
+
+  private updateState(data: Partial<StateUpdateData>): void {
     if (this.onStateUpdate) {
-      this.onStateUpdate({ currentLine: line, currentColumn: col });
+      this.onStateUpdate(data as StateUpdateData);
     }
   }
 }

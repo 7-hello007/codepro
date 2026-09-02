@@ -48,6 +48,14 @@
       },
       {
         "name": "ohos.permission.READ_WRITE_USER_FILE"
+      },
+      {
+        "name": "ohos.permission.GET_WIFI_INFO",
+        "reason": "$string:permission_wifi_reason",
+        "usedScene": {
+          "abilities": ["EntryAbility"],
+          "when": "inuse"
+        }
       }
     ],
     "deliveryWithInstall": true,

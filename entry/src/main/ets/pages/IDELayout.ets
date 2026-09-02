@@ -80,7 +80,7 @@ export struct IdeLayout {
     this.loadFallbackFileTree();
     this.openDefaultFile();
     this.initQemuServices();
-    this.initDialog();
+    // 移除 initDialog 调用，改为按需创建
     this.initPollingCallbacks();
 
     this.qemuCoordinator.start();
@@ -277,7 +277,7 @@ export struct IdeLayout {
         node.isExpanded = false;
         // 如果之前有子节点但未展开，可以保留，但为保持一致性，清空或保留？
         // 为了保持数据最新，建议清空，但考虑到性能，如果已有子节点且未展开，可以不请求，但可能导致数据陈旧。
-        // 稳妥方案：不清空，但展开时会重新加载。这里我们保留现有 children（如果有）。
+        // 稳妥方案：不清空，但展开时会重新加载。因此这里保留现有 children（如果有）。
         // 但为了确保数据一致性，我们可以在展开时总是重新加载，因此这里不做清空。
         // 但如果有子节点，递归处理（虽然不会展开，但子节点可能之前有展开状态，需要保留）
         if (node.children && node.children.length > 0) {
@@ -286,22 +286,6 @@ export struct IdeLayout {
         }
       }
     }
-  }
-
-  private initDialog(): void {
-    this.dialogController = new CustomDialogController({
-      builder: CreateDialog({
-        dialogType: this.dialogType,
-        dialogParentPath: this.dialogParentPath,
-        inputValue: '',
-        onConfirm: (name) => {
-          this.qemuContextMenuManager.executeCreate(this.dialogParentPath, name, this.dialogType)
-            .then((success) => {
-              promptAction.showToast({ message: success ? '创建成功' : '创建失败', duration: 1000 });
-            });
-        }
-      })
-    });
   }
 
   private initPollingCallbacks(): void {
@@ -316,16 +300,36 @@ export struct IdeLayout {
 
   // ---------- 对话框方法 ----------
   private showCreateDialog(): void {
-    if (!this.dialogController) return;
+    // 每次显示都重新创建对话框，确保使用最新的 dialogType 和 dialogParentPath
     this.dialogController = new CustomDialogController({
       builder: CreateDialog({
         dialogType: this.dialogType,
         dialogParentPath: this.dialogParentPath,
         inputValue: '',
         onConfirm: (name) => {
+          // 执行创建
           this.qemuContextMenuManager.executeCreate(this.dialogParentPath, name, this.dialogType)
             .then((success) => {
-              promptAction.showToast({ message: success ? '创建成功' : '创建失败', duration: 1000 });
+              if (success) {
+                promptAction.showToast({ message: '创建成功', duration: 1000 });
+                // 刷新文件树
+                this.fileOperationManager.refreshFileTree();
+                // 如果是文件，自动打开
+                if (this.dialogType === 'file') {
+                  // 构建新文件完整路径
+                  const newPath = this.dialogParentPath + '/' + name;
+                  // 确保路径格式正确（避免双斜杠）
+                  const normalizedPath = newPath.replace(/\/+/g, '/');
+                  // 通过 TabManager 打开文件
+                  this.tabManager.openFile(normalizedPath);
+                }
+              } else {
+                promptAction.showToast({ message: '创建失败', duration: 1000 });
+              }
+            })
+            .catch((err:Error) => {
+              console.error('[IDELayout] 创建失败:', err);
+              promptAction.showToast({ message: '创建失败: ' + err, duration: 1000 });
             });
         }
       })
