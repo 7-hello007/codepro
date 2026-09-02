@@ -1,6 +1,7 @@
 // entry/src/main/ets/services/QemuContextMenuManager.ets
 import promptAction from '@ohos.promptAction';
 import { QemuFileSystem } from '../lib/QemuFileSystem';
+import { StatusBarManager } from './StatusBarManager'; // 新增导入
 
 /**
  * Qemu 右键菜单管理器
@@ -9,6 +10,7 @@ import { QemuFileSystem } from '../lib/QemuFileSystem';
 export class QemuContextMenuManager {
   private qemuFs: QemuFileSystem | null = null;
   private onRefreshNeeded?: () => void;
+  private statusBarManager: StatusBarManager | null = null; // 新增
 
   // 回调：通知外部显示创建对话框
   onShowCreateDialog?: (parentPath: string, type: 'file' | 'folder') => void;
@@ -17,6 +19,11 @@ export class QemuContextMenuManager {
 
   bindFileSystem(qemuFs: QemuFileSystem): void {
     this.qemuFs = qemuFs;
+  }
+
+  // ====== 新增：绑定状态栏管理器 ======
+  bindStatusBarManager(statusBarManager: StatusBarManager): void {
+    this.statusBarManager = statusBarManager;
   }
 
   setRefreshCallback(callback: () => void): void {
@@ -47,19 +54,16 @@ export class QemuContextMenuManager {
       .then((data: promptAction.ActionMenuSuccessResponse) => {
         const index = data.index;
         if (index === 0) {
-          // 新建文件
           const parentPath = isDir ? path : path.substring(0, path.lastIndexOf('/'));
           if (this.onShowCreateDialog) {
             this.onShowCreateDialog(parentPath, 'file');
           }
         } else if (index === 1) {
-          // 新建文件夹
           const parentPath = isDir ? path : path.substring(0, path.lastIndexOf('/'));
           if (this.onShowCreateDialog) {
             this.onShowCreateDialog(parentPath, 'folder');
           }
         } else if (index === 2) {
-          // 删除
           if (this.onShowDeleteDialog) {
             this.onShowDeleteDialog(path, isDir);
           }
@@ -71,11 +75,14 @@ export class QemuContextMenuManager {
   }
 
   /**
-   * 执行创建
+   * 执行创建（带进度反馈）
    */
   async executeCreate(parentPath: string, name: string, type: 'file' | 'folder'): Promise<boolean> {
     if (!this.qemuFs) return false;
     const fullPath = parentPath + '/' + name;
+    const actionName = type === 'file' ? '文件' : '文件夹';
+    // ====== 开始进度 ======
+    this.statusBarManager?.startOperation(`正在创建${actionName}: ${name}`);
     try {
       let success: boolean;
       if (type === 'file') {
@@ -83,29 +90,37 @@ export class QemuContextMenuManager {
       } else {
         success = await this.qemuFs.mkdir(fullPath);
       }
+      // ====== 结束进度（无论成功失败） ======
+      this.statusBarManager?.finishOperation();
       if (success && this.onRefreshNeeded) {
         this.onRefreshNeeded();
       }
       return success;
     } catch (e) {
       console.error('[QemuContextMenuManager] 创建失败:', e);
+      this.statusBarManager?.finishOperation();
       return false;
     }
   }
 
   /**
-   * 执行删除
+   * 执行删除（带进度反馈）
    */
   async executeDelete(path: string): Promise<boolean> {
     if (!this.qemuFs) return false;
+    const name = path.split('/').pop() || path;
+    // ====== 开始进度 ======
+    this.statusBarManager?.startOperation(`正在删除: ${name}`);
     try {
       const success = await this.qemuFs.rm(path);
+      this.statusBarManager?.finishOperation();
       if (success && this.onRefreshNeeded) {
         this.onRefreshNeeded();
       }
       return success;
     } catch (e) {
       console.error('[QemuContextMenuManager] 删除失败:', e);
+      this.statusBarManager?.finishOperation();
       return false;
     }
   }

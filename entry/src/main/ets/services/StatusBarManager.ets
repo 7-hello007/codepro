@@ -13,6 +13,9 @@ export interface StatusBarInfo {
   lastModified: string;
   wifiName: string;
   wifiStatus: number; // 0=强,1=中,2=弱/无
+  // ====== 新增：操作进度状态 ======
+  isOperationInProgress: boolean;
+  operationMessage: string;
 }
 
 export class StatusBarManager {
@@ -26,28 +29,25 @@ export class StatusBarManager {
     currentTime: '',
     lastModified: '',
     wifiName: 'WiFi',
-    wifiStatus: 2
+    wifiStatus: 2,
+    isOperationInProgress: false,
+    operationMessage: ''
   };
 
-  private timerId: number = -1;          // 时间定时器（1秒）
-  private wifiTimerId: number = -1;      // WiFi定时器（30秒）
+  private timerId: number = -1;
+  private wifiTimerId: number = -1;
 
   onStatusChanged?: (info: StatusBarInfo) => void;
 
   startTimer(): void {
     this.updateTime();
     this.updateWifi();
-
-    // 时间每秒更新一次（显示秒）
     this.timerId = setInterval(() => {
       this.updateTime();
     }, 1000);
-
-    // WiFi 每30秒更新一次
     this.wifiTimerId = setInterval(() => {
       this.updateWifi();
     }, 30000);
-
     console.info('[StatusBar] 定时器已启动');
   }
 
@@ -78,6 +78,19 @@ export class StatusBarManager {
 
   setLastModified(time: string): void {
     this.info.lastModified = time;
+    this.notify();
+  }
+
+  // ====== 新增：操作进度控制方法 ======
+  startOperation(message: string): void {
+    this.info.isOperationInProgress = true;
+    this.info.operationMessage = message;
+    this.notify();
+  }
+
+  finishOperation(): void {
+    this.info.isOperationInProgress = false;
+    this.info.operationMessage = '';
     this.notify();
   }
 
@@ -132,7 +145,9 @@ export class StatusBarManager {
       currentTime: this.info.currentTime,
       lastModified: this.info.lastModified,
       wifiName: this.info.wifiName,
-      wifiStatus: this.info.wifiStatus
+      wifiStatus: this.info.wifiStatus,
+      isOperationInProgress: this.info.isOperationInProgress,
+      operationMessage: this.info.operationMessage
     };
   }
 

@@ -1,24 +1,24 @@
 // entry/src/main/ets/components/FileTree.ets
 
-export interface FileNode {
-  name: string;
-  path: string;
-  isDir: boolean;
-  isExpanded: boolean;
-  children?: FileNode[];
-}
+import { FileNode } from '../model/FileNode';
+
+export { FileNode };
 
 @Component
 export struct FileTree {
 
   @Prop rootNodes: FileNode[] = [];
-  @Prop selectedPath: string = '';
+  @Prop @Watch('onSelectedPathChange') selectedPath: string = '';
   @Prop version: number = 0;
 
   onFileClick?: (path: string) => void;
   onDirToggle?: (path: string) => void;
-  // 新增：右键点击回调（长按触发）
   onFileRightClick?: (path: string, isDir: boolean) => void;
+
+  // ====== 监听 selectedPath 变化，打印日志 ======
+  private onSelectedPathChange(): void {
+    console.info('[FileTree] selectedPath 已变化:', this.selectedPath);
+  }
 
   build() {
     Scroll() {
@@ -58,12 +58,10 @@ export struct FileTree {
   private buildNode(node: FileNode, level: number) {
     Column() {
       Row() {
-        // 缩进
         if (level > 0) {
           Blank().width(level * 18)
         }
 
-        // 展开/折叠箭头
         if (node.isDir) {
           Text(node.isExpanded ? '▼' : '▶')
             .fontSize(10)
@@ -79,16 +77,14 @@ export struct FileTree {
           Blank().width(18)
         }
 
-        // 图标
         Text(node.isDir ? (node.isExpanded ? '📂' : '📁') : this.getFileIcon(node.name))
           .fontSize(14)
           .width(24)
           .textAlign(TextAlign.Center)
 
-        // 文件名
         Text(node.name)
           .fontSize(13)
-          .fontColor(this.selectedPath === node.path ? '#ffffff' : '#cccccc')
+          .fontColor(node.path === this.selectedPath ? '#ffffff' : '#cccccc')
           .maxLines(1)
           .textOverflow({ overflow: TextOverflow.Ellipsis })
           .layoutWeight(1)
@@ -96,21 +92,22 @@ export struct FileTree {
       .width('100%')
       .height(32)
       .padding({ left: 4, right: 8 })
-      .backgroundColor(this.selectedPath === node.path ? '#37373d' : '#1e1e1e')
+      .backgroundColor(node.path === this.selectedPath ? '#37373d' : '#1e1e1e')
       .borderRadius(3)
-      // ----- 单击事件 -----
       .onClick(() => {
-        if (node.isDir) {
-          if (this.onDirToggle) {
-            this.onDirToggle(node.path);
-          }
-        } else {
+        // ====== 点击时打印节点路径和当前 selectedPath ======
+        console.info('[FileTree] 点击节点:', node.path, 'isDir:', node.isDir);
+        console.info('[FileTree] 当前 selectedPath:', this.selectedPath);
+        if (!node.isDir) {
           if (this.onFileClick) {
             this.onFileClick(node.path);
           }
+        } else {
+          if (this.onDirToggle) {
+            this.onDirToggle(node.path);
+          }
         }
       })
-      // ----- 新增：长按事件（右键菜单） -----
       .gesture(
         LongPressGesture({ repeat: false, duration: 500 })
           .onAction(() => {
@@ -120,7 +117,6 @@ export struct FileTree {
           })
       )
 
-      // 子节点
       if (node.isDir && node.isExpanded && node.children && node.children.length > 0) {
         ForEach(
           node.children,
