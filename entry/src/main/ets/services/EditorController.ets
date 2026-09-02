@@ -69,6 +69,9 @@ export class EditorController {
     };
   }
 
+  /**
+   * 设置编辑器内容（自动处理未就绪缓存）
+   */
   setContent(content: string, language: string = 'plaintext'): void {
     if (!this.isEditorReady) {
       this.pendingContent = content;
@@ -81,6 +84,38 @@ export class EditorController {
     this.applyContent(content, language);
   }
 
+  /**
+   * 显示空状态（覆盖层 + 只读）
+   * @param message 显示的文字
+   */
+  showEmptyState(message: string = '未打开任何文件'): void {
+    const js = `
+      if (typeof window.showEmptyState === 'function') {
+        window.showEmptyState(${JSON.stringify(message)});
+      } else {
+        console.warn('showEmptyState not available');
+      }
+    `;
+    this.webController.runJavaScript(js);
+    // 同时将当前内容置空，防止残留
+    this.currentContent = '';
+  }
+
+  /**
+   * 设置编辑器只读状态
+   */
+  setReadOnly(readonly: boolean): void {
+    const js = `
+      if (typeof window.setReadOnly === 'function') {
+        window.setReadOnly(${readonly});
+      }
+    `;
+    this.webController.runJavaScript(js);
+  }
+
+  /**
+   * 触发布局更新
+   */
   triggerLayout(): void {
     this.webController.runJavaScript(`
       if (typeof window.triggerLayout === 'function') {
@@ -89,46 +124,73 @@ export class EditorController {
     `);
   }
 
+  /**
+   * 获取当前编辑器内容（从缓存）
+   */
   getCurrentContent(): string {
     return this.currentContent;
   }
 
+  /**
+   * 实际写入内容（内部方法）
+   */
   private applyContent(content: string, language: string): void {
     const safeContent = JSON.stringify(content);
-    const safeLanguage = JSON.stringify(language);
+    const safeLanguage = JSON.stringify(language || 'plaintext');
+    const hasContent = content && content.length > 0;
     const jsCode = `
       (function() {
         try {
+          // 先设置语言（确保模型存在）
+          if (typeof window.setEditorLanguage === 'function') {
+            window.setEditorLanguage(${safeLanguage});
+          }
+          // 设置内容
           if (typeof window.forceSetContent === 'function') {
             window.forceSetContent(${safeContent}, ${safeLanguage});
-            return true;
           } else if (typeof window.setEditorContent === 'function') {
             window.setEditorContent(${safeContent}, ${safeLanguage});
-            return true;
           } else {
             console.error('没有可用的设置内容方法');
             return false;
           }
+          // 根据内容是否非空设置只读
+          if (typeof window.setReadOnly === 'function') {
+            window.setReadOnly(${!hasContent});
+          }
+          // 再次确保语言（有时第一次可能未生效）
+          if (typeof window.setEditorLanguage === 'function') {
+            window.setEditorLanguage(${safeLanguage});
+          }
+          return true;
         } catch (e) {
           console.error('写入 Monaco 失败:', e);
           return false;
         }
       })();
     `;
-    console.info('📤 → Monaco:', 'language=' + language, 'length=' + content.length);
-    this.webController.runJavaScript(jsCode, (err: Error | null) => {
-      if (err) console.error('❌ Monaco JS 执行失败:', err.message);
-      else console.info('✅ Monaco 内容写入成功');
-    });
+    this.webController.runJavaScript(jsCode);
   }
 
+  /**
+   * 根据文件路径获取 Monaco 语言标识
+   */
   static getLanguageFromPath(path: string): string {
     const ext = path.split('.').pop()?.toLowerCase() || '';
     const map: Record<string, string> = {
-      'ets': 'typescript', 'ts': 'typescript', 'js': 'javascript',
-      'json': 'json', 'html': 'html', 'css': 'css',
-      'xml': 'xml', 'py': 'python', 'java': 'java',
-      'c': 'c', 'cpp': 'cpp', 'go': 'go', 'md': 'markdown'
+      'ets': 'typescript',
+      'ts': 'typescript',
+      'js': 'javascript',
+      'json': 'json',
+      'html': 'html',
+      'css': 'css',
+      'xml': 'xml',
+      'py': 'python',
+      'java': 'java',
+      'c': 'c',
+      'cpp': 'cpp',
+      'go': 'go',
+      'md': 'markdown'
     };
     return map[ext] || 'plaintext';
   }

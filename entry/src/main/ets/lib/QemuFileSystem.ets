@@ -41,6 +41,33 @@ export class QemuFileSystem {
     return output ? output.trim() : this.currentPath;
   }
 
+  // 在 QemuFileSystem 类中添加以下方法
+
+  /**
+   * 创建目录（支持递归）
+   */
+  async mkdir(path: string): Promise<boolean> {
+    const result = await this.exec('/bin/mkdir', ['-p', path]);
+    return result !== null;
+  }
+
+  /**
+   * 创建空文件
+   */
+  async touch(path: string): Promise<boolean> {
+    const result = await this.exec('/bin/touch', [path]);
+    return result !== null;
+  }
+
+  /**
+   * 删除文件或目录（默认递归删除）
+   */
+  async rm(path: string, recursive: boolean = true): Promise<boolean> {
+    const args = recursive ? ['-rf', path] : ['-f', path];
+    const result = await this.exec('/bin/rm', args);
+    return result !== null;
+  }
+
   /**
    * 列出指定目录内容
    */
@@ -54,6 +81,48 @@ export class QemuFileSystem {
       return [];
     }
     return this.parseLsOutput(output, targetPath);
+  }
+
+  /**
+   * 读取文件内容（UTF-8）
+   * @param path 虚拟机内绝对路径
+   * @returns 文件内容字符串，失败返回 null
+   */
+  async readFile(path: string): Promise<string | null> {
+    if (!this.agent) {
+      console.error('[QemuFileSystem] Agent not bound');
+      return null;
+    }
+    try {
+      const output = await this.agent.execAndGetOutput('/bin/cat', [path]);
+      return output; // 已是 UTF-8 字符串
+    } catch (e) {
+      console.error(`[QemuFileSystem] readFile failed: ${path}`, e);
+      return null;
+    }
+  }
+
+  /**
+   * 写入文件内容（覆盖模式）
+   * @param path 虚拟机内绝对路径
+   * @param content 文件内容
+   * @returns 是否成功
+   */
+  async writeFile(path: string, content: string): Promise<boolean> {
+    if (!this.agent) {
+      console.error('[QemuFileSystem] Agent not bound');
+      return false;
+    }
+    try {
+      // 使用 printf 转义单引号，避免注入
+      const escaped = content.replace(/'/g, "'\\''");
+      const cmd = `printf '%s' '${escaped}' > ${path}`;
+      const result = await this.agent.execAndGetOutput('/bin/sh', ['-c', cmd]);
+      return result !== null;
+    } catch (e) {
+      console.error(`[QemuFileSystem] writeFile failed: ${path}`, e);
+      return false;
+    }
   }
 
   /**

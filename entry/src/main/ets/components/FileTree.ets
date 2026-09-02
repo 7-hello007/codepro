@@ -17,6 +17,8 @@ export struct FileTree {
 
   onFileClick?: (path: string) => void;
   onDirToggle?: (path: string) => void;
+  // 新增：右键点击回调（长按触发）
+  onFileRightClick?: (path: string, isDir: boolean) => void;
 
   build() {
     Scroll() {
@@ -42,14 +44,14 @@ export struct FileTree {
         }
       }
       .width('100%')
-      .alignItems(HorizontalAlign.Start)   // ← 水平左对齐
-      .justifyContent(FlexAlign.Start)     // ← 垂直顶部对齐（关键）
+      .alignItems(HorizontalAlign.Start)
+      .justifyContent(FlexAlign.Start)
     }
     .width('100%')
     .height('100%')
     .scrollBar(BarState.Auto)
     .scrollable(ScrollDirection.Vertical)
-    .align(Alignment.TopStart)             // ← 强制 Scroll 内容从左上开始
+    .align(Alignment.TopStart)
   }
 
   @Builder
@@ -96,6 +98,7 @@ export struct FileTree {
       .padding({ left: 4, right: 8 })
       .backgroundColor(this.selectedPath === node.path ? '#37373d' : '#1e1e1e')
       .borderRadius(3)
+      // ----- 单击事件 -----
       .onClick(() => {
         if (node.isDir) {
           if (this.onDirToggle) {
@@ -107,6 +110,15 @@ export struct FileTree {
           }
         }
       })
+      // ----- 新增：长按事件（右键菜单） -----
+      .gesture(
+        LongPressGesture({ repeat: false, duration: 500 })
+          .onAction(() => {
+            if (this.onFileRightClick) {
+              this.onFileRightClick(node.path, node.isDir);
+            }
+          })
+      )
 
       // 子节点
       if (node.isDir && node.isExpanded && node.children && node.children.length > 0) {

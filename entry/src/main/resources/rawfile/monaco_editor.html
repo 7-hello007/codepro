@@ -23,6 +23,7 @@
             width: 100%;
             height: 100%;
             background: #1e1e1e;
+            position: relative;
         }
         #monaco-inner {
             width: 100%;
@@ -38,20 +39,39 @@
             height: 100%;
             font-family: sans-serif;
         }
+
+        #empty-state {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            background: #1e1e1e;
+            color: #888888;
+            font-size: 20px;
+            font-family: 'Segoe UI', sans-serif;
+            pointer-events: none;
+            z-index: 10;
+            opacity: 0;
+            transition: opacity 0.3s ease;
+        }
+        #empty-state.visible {
+            opacity: 1;
+        }
     </style>
 </head>
 
 <body>
 
 <div id="editor-container">
+    <div id="empty-state">未打开任何文件</div>
     <div id="monaco-inner">
         <div class="loading">⏳ 加载编辑器中...</div>
     </div>
 </div>
-
-<!-- ========================================================= -->
-<!-- Monaco Loader                                             -->
-<!-- ========================================================= -->
 
 <script src="https://cdnjs.cloudflare.com/ajax/libs/monaco-editor/0.55.1/min/vs/loader.min.js">
 </script>
@@ -59,27 +79,19 @@
 <script>
     console.log('========= Monaco HTML 开始加载 =========');
 
-    // =========================================================
-    // 全局状态
-    // =========================================================
-
     let editor = null;
     let currentContent = '';
     let currentLanguage = 'typescript';
     let isInitialized = false;
 
-    // 程序修改标记（防止触发 ArkTS 回调）
     let isProgrammaticChange = false;
 
-    // Monaco 未初始化之前暂存
     let pendingContent = '';
     let pendingLanguage = 'typescript';
     let hasPendingContent = false;
     let hasPendingLanguage = false;
 
-    // =========================================================
-    // 日志
-    // =========================================================
+    const emptyStateEl = document.getElementById('empty-state');
 
     function log(message) {
         console.log('[Monaco]', message);
@@ -91,10 +103,6 @@
             console.warn('[Monaco] ArkTS log 调用失败:', e);
         }
     }
-
-    // =========================================================
-    // 通知 ArkTS
-    // =========================================================
 
     function notifyEditorReady() {
         try {
@@ -136,10 +144,6 @@
         }
     }
 
-    // =========================================================
-    // 获取容器
-    // =========================================================
-
     function getEditorContainer() {
         const container = document.getElementById('monaco-inner');
         if (!container) {
@@ -149,10 +153,50 @@
         return container;
     }
 
-    // =========================================================
-    // 创建 Monaco
-    // 只创建一次，后续切换文件不再重新创建
-    // =========================================================
+    window.showEmptyState = function(message) {
+        const msg = message || '未打开任何文件';
+        if (emptyStateEl) {
+            emptyStateEl.textContent = msg;
+            emptyStateEl.classList.add('visible');
+        }
+        if (editor) {
+            try {
+                isProgrammaticChange = true;
+                const model = editor.getModel();
+                if (model) {
+                    model.setValue('');
+                }
+                editor.updateOptions({ readOnly: true });
+                currentContent = '';
+            } catch (e) {
+                console.error('[Monaco] showEmptyState 操作失败:', e);
+            } finally {
+                setTimeout(() => { isProgrammaticChange = false; }, 0);
+            }
+        } else {
+            pendingContent = '';
+            hasPendingContent = true;
+        }
+        console.log('📭 空状态显示:', msg);
+    };
+
+    window.setReadOnly = function(readonly) {
+        if (!editor) return;
+        try {
+            editor.updateOptions({ readOnly: !!readonly });
+            if (readonly && !editor.getValue()) {
+                emptyStateEl?.classList.add('visible');
+            } else {
+                emptyStateEl?.classList.remove('visible');
+            }
+        } catch (e) {
+            console.error('[Monaco] setReadOnly 失败:', e);
+        }
+    };
+
+    function hideEmptyState() {
+        emptyStateEl?.classList.remove('visible');
+    }
 
     function createEditor(content, language) {
         console.log('🔄 createEditor:', 'language =', language, 'contentLength =', content ? content.length : 0);
@@ -160,13 +204,11 @@
         const container = getEditorContainer();
         if (!container) return;
 
-        // 防止重复创建
         if (editor) {
             console.warn('[Monaco] Editor 已存在，禁止重复创建');
             return;
         }
 
-        // 清理 loading
         container.innerHTML = '';
         container.style.width = '100%';
         container.style.height = '100%';
@@ -186,10 +228,37 @@
                 smoothScrolling: true,
                 cursorSmoothCaretAnimation: 'on',
                 tabSize: 2,
-                insertSpaces: true
+                insertSpaces: true,
+                readOnly: true
             });
 
             console.log('✅ Monaco Editor 创建成功');
+
+            // ====== 添加语法错误检测（诊断） ======
+            // 配置 TypeScript/JavaScript 诊断
+            if (monaco && monaco.languages && monaco.languages.typescript) {
+                monaco.languages.typescript.typescriptDefaults.setCompilerOptions({
+                    target: monaco.languages.typescript.ScriptTarget.ES2020,
+                    allowNonTsExtensions: true,
+                    moduleResolution: monaco.languages.typescript.ModuleResolutionKind.NodeJs,
+                    module: monaco.languages.typescript.ModuleKind.CommonJS,
+                    noEmit: true,
+                    allowJs: true,
+                    checkJs: true,
+                    strict: true,
+                    noUnusedLocals: true,
+                    noUnusedParameters: true
+                });
+                monaco.languages.typescript.typescriptDefaults.setDiagnosticsOptions({
+                    noSemanticValidation: false,
+                    noSyntaxValidation: false,
+                    noSuggestionDiagnostics: false
+                });
+                console.log('✅ TypeScript 诊断配置已启用');
+            } else {
+                console.warn('⚠️ TypeScript 语言服务不可用');
+            }
+
         } catch (e) {
             console.error('❌ Monaco Editor 创建失败:', e);
             container.innerHTML = '<div class="loading">❌ 编辑器加载失败: ' + (e && e.message ? e.message : String(e)) + '</div>';
@@ -197,28 +266,30 @@
             return;
         }
 
-        // 同步状态
         currentContent = content || '';
         currentLanguage = language || 'typescript';
 
-        // -----------------------------------------------------
-        // 内容变化
-        // -----------------------------------------------------
+        if (!content) {
+            window.showEmptyState('未打开任何文件');
+        } else {
+            hideEmptyState();
+            try { editor.updateOptions({ readOnly: false }); } catch(e) {}
+        }
+
         editor.onDidChangeModelContent(() => {
             if (!editor) return;
             const value = editor.getValue();
             currentContent = value;
             if (isProgrammaticChange) return;
+            hideEmptyState();
             notifyContentChange(value);
         });
 
-        // 光标变化
         editor.onDidChangeCursorPosition((e) => {
             if (!e || !e.position) return;
             notifyCursorChange(e.position.lineNumber, e.position.column);
         });
 
-        // 失焦
         editor.onDidBlurEditorText(() => {
             if (!editor) return;
             if (isProgrammaticChange) return;
@@ -227,24 +298,16 @@
             notifyEditorBlur(content);
         });
 
-        // Ready
         isInitialized = true;
 
-        // 滚动到顶部
         forceEditorTop();
         setTimeout(forceEditorTop, 100);
 
-        // 应用 pending 状态
         applyPendingState();
 
-        // 通知 ArkTS
         console.log('✅ Monaco Editor 初始化完成');
         notifyEditorReady();
     }
-
-    // =========================================================
-    // 辅助函数
-    // =========================================================
 
     function forceEditorTop() {
         if (!editor) return;
@@ -256,7 +319,6 @@
 
     function applyPendingState() {
         if (!editor) return;
-        // 优先语言
         if (hasPendingLanguage) {
             const language = pendingLanguage || 'plaintext';
             try {
@@ -268,7 +330,6 @@
             } catch (e) { console.error('[Monaco] 应用 pending language 失败:', e); }
             hasPendingLanguage = false;
         }
-        // 内容
         if (hasPendingContent) {
             setEditorValueInternal(pendingContent);
             hasPendingContent = false;
@@ -288,7 +349,10 @@
                 model.setValue(value);
             }
             currentContent = value;
-            // 光标归零
+            if (value) {
+                hideEmptyState();
+                try { editor.updateOptions({ readOnly: false }); } catch(e) {}
+            }
             try {
                 editor.setPosition({ lineNumber: 1, column: 1 });
                 editor.revealPositionInCenter({ lineNumber: 1, column: 1 });
@@ -299,10 +363,6 @@
             setTimeout(() => { isProgrammaticChange = false; }, 0);
         }
     }
-
-    // =========================================================
-    // 强制设置内容（绕过所有缓存和状态检查）
-    // =========================================================
 
     window.forceSetContent = function(content, language) {
         console.log('🚀 forceSetContent called, length:', content.length, 'language:', language);
@@ -317,18 +377,18 @@
         try {
             const model = editor.getModel();
             if (model) {
-                // 设置语言
                 if (language) {
                     monaco.editor.setModelLanguage(model, language);
                     currentLanguage = language;
                 }
-                // 设置内容
                 model.setValue(content);
                 currentContent = content;
-                // 清除暂存
                 hasPendingContent = false;
                 hasPendingLanguage = false;
-                // 光标归零
+                if (content) {
+                    hideEmptyState();
+                    editor.updateOptions({ readOnly: false });
+                }
                 try {
                     editor.setPosition({ lineNumber: 1, column: 1 });
                     editor.revealPositionInCenter({ lineNumber: 1, column: 1 });
@@ -341,10 +401,6 @@
             console.error('❌ forceSetContent 失败:', e);
         }
     };
-
-    // =========================================================
-    // 原有接口（保留兼容性）
-    // =========================================================
 
     window.setEditorValue = function(newValue) {
         const value = newValue == null ? '' : String(newValue);
@@ -388,7 +444,6 @@
             hasPendingLanguage = true;
             return true;
         }
-        // 使用 forceSetContent 统一处理
         window.forceSetContent(value, lang);
         return true;
     };
@@ -427,20 +482,12 @@
         return !!(editor && isInitialized);
     };
 
-    // =========================================================
-    // 清空缓存（调试用）
-    // =========================================================
-
     window.clearEditorCache = function() {
         try {
             localStorage.clear();
             console.log('🧹 已清除 localStorage');
         } catch (e) {}
     };
-
-    // =========================================================
-    // 加载 Monaco
-    // =========================================================
 
     require.config({
         paths: {

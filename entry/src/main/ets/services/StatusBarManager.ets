@@ -1,5 +1,7 @@
 // entry/src/main/ets/services/StatusBarManager.ets
 import wifiManager from '@ohos.wifiManager';
+import wifi from '@ohos.wifi';
+import { BusinessError } from '@kit.BasicServicesKit';
 
 export interface StatusBarInfo {
   line: number;
@@ -31,22 +33,34 @@ export class StatusBarManager {
     wifiStatus: 2
   };
 
-  private timerId: number = -1;
+  private timerId: number = -1;          // 时间定时器（60秒）
+  private wifiTimerId: number = -1;      // WiFi定时器（30秒）
 
   onStatusChanged?: (info: StatusBarInfo) => void;
 
   startTimer(): void {
     this.updateTime();
     this.updateWifi();
+
+    // 时间每分钟更新一次
     this.timerId = setInterval(() => {
       this.updateTime();
     }, 60000);
+
+    // WiFi 每30秒更新一次
+    this.wifiTimerId = setInterval(() => {
+      this.updateWifi();
+    }, 30000);
   }
 
   stopTimer(): void {
     if (this.timerId !== -1) {
       clearInterval(this.timerId);
       this.timerId = -1;
+    }
+    if (this.wifiTimerId !== -1) {
+      clearInterval(this.wifiTimerId);
+      this.wifiTimerId = -1;
     }
   }
 
