@@ -36,7 +36,24 @@ export class QemuFileTreeService {
       this.currentRoot = path;
     }
     try {
-      const nodes: FileNode[] = await this.qemuFs.listDirectory(this.currentRoot);
+      let nodes: FileNode[];
+      if (this.currentRoot === '/') {
+        // 根目录：直接列出根下内容
+        nodes = await this.qemuFs.listDirectory('/');
+      } else {
+        // 非根目录：创建一个父目录节点，其子节点为该目录下的内容
+        const children = await this.qemuFs.listDirectory(this.currentRoot);
+        // 提取目录名（最后一部分）
+        const dirName = this.currentRoot.split('/').filter(p => p !== '').pop() || this.currentRoot;
+        const rootNode: FileNode = {
+          name: dirName,
+          path: this.currentRoot,
+          isDir: true,
+          isExpanded: false,
+          children: children
+        };
+        nodes = [rootNode];
+      }
       console.info('[QemuFileTreeService] 目录加载完成，路径:', this.currentRoot, '节点数:', nodes.length);
       this.version++;
       if (this.onDataChanged) {
