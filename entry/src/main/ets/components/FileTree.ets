@@ -15,42 +15,50 @@ export struct FileTree {
   onDirToggle?: (path: string) => void;
   onFileRightClick?: (path: string, isDir: boolean) => void;
 
-  // ====== 监听 selectedPath 变化，打印日志 ======
   private onSelectedPathChange(): void {
     console.info('[FileTree] selectedPath 已变化:', this.selectedPath);
   }
 
   build() {
+    // 外层：垂直滚动
     Scroll() {
-      Column() {
-        if (this.rootNodes.length === 0) {
-          Row() {
-            Text('暂无文件')
-              .fontSize(13)
-              .fontColor('#777777')
+      // 内层：水平滚动（整体左右滑动）
+      Scroll() {
+        Column() {
+          if (this.rootNodes.length === 0) {
+            Row() {
+              Text('暂无文件')
+                .fontSize(13)
+                .fontColor('#777777')
+            }
+            .width('100%')
+            .height(40)
+            .padding({ left: 16 })
+            .alignItems(VerticalAlign.Center)
+          } else {
+            ForEach(
+              this.rootNodes,
+              (node: FileNode) => {
+                this.buildNode(node, 0);
+              },
+              (node: FileNode) => node.path + '_' + this.version
+            )
           }
-          .width('100%')
-          .height(40)
-          .padding({ left: 16 })
-          .alignItems(VerticalAlign.Center)
-        } else {
-          ForEach(
-            this.rootNodes,
-            (node: FileNode) => {
-              this.buildNode(node, 0);
-            },
-            (node: FileNode) => node.path + '_' + this.version
-          )
         }
+        .width('auto')          // 宽度由内容撑开，触发水平滚动
+        .alignItems(HorizontalAlign.Start)
+        .padding({ right: 16 }) // 留出滚动空间
       }
+      .scrollable(ScrollDirection.Horizontal)
+      .scrollBar(BarState.Auto)   // 显示水平滚动条
       .width('100%')
-      .alignItems(HorizontalAlign.Start)
-      .justifyContent(FlexAlign.Start)
+      .height('auto')            // 关键：高度由内容决定，垂直滚动交给外层
+      .align(Alignment.TopStart)
     }
+    .scrollable(ScrollDirection.Vertical)
+    .scrollBar(BarState.Auto)     // 显示垂直滚动条
     .width('100%')
     .height('100%')
-    .scrollBar(BarState.Auto)
-    .scrollable(ScrollDirection.Vertical)
     .align(Alignment.TopStart)
   }
 
@@ -58,10 +66,12 @@ export struct FileTree {
   private buildNode(node: FileNode, level: number) {
     Column() {
       Row() {
+        // 缩进
         if (level > 0) {
           Blank().width(level * 18)
         }
 
+        // 展开/收起箭头（仅文件夹）
         if (node.isDir) {
           Text(node.isExpanded ? '▼' : '▶')
             .fontSize(10)
@@ -77,27 +87,28 @@ export struct FileTree {
           Blank().width(18)
         }
 
+        // 图标
         Text(node.isDir ? (node.isExpanded ? '📂' : '📁') : this.getFileIcon(node.name))
           .fontSize(14)
           .width(24)
           .textAlign(TextAlign.Center)
+          .flexShrink(0)
 
+        // 文件名：完整显示，不截断，不压缩
         Text(node.name)
           .fontSize(13)
           .fontColor(node.path === this.selectedPath ? '#ffffff' : '#cccccc')
           .maxLines(1)
-          .textOverflow({ overflow: TextOverflow.Ellipsis })
-          .layoutWeight(1)
+          .textOverflow({ overflow: TextOverflow.None })
+          .width('auto')
+          .flexShrink(0)
       }
-      .width('100%')
-      .height(32)
-      .padding({ left: 4, right: 8 })
-      .backgroundColor(node.path === this.selectedPath ? '#37373d' : '#1e1e1e')
+      .width('auto')          // 宽度由内容撑开，但点击区域包含 padding
+      .height(36)             // 增加行高，扩大点击区域
+      .padding({ left: 12, right: 12 })  // 左右 padding 扩大点击区域
+      .backgroundColor(node.path === this.selectedPath ? '#37373d' : 'transparent')
       .borderRadius(3)
       .onClick(() => {
-        // ====== 点击时打印节点路径和当前 selectedPath ======
-        console.info('[FileTree] 点击节点:', node.path, 'isDir:', node.isDir);
-        console.info('[FileTree] 当前 selectedPath:', this.selectedPath);
         if (!node.isDir) {
           if (this.onFileClick) {
             this.onFileClick(node.path);
@@ -117,6 +128,7 @@ export struct FileTree {
           })
       )
 
+      // 递归子节点
       if (node.isDir && node.isExpanded && node.children && node.children.length > 0) {
         ForEach(
           node.children,
@@ -127,7 +139,8 @@ export struct FileTree {
         )
       }
     }
-    .width('100%')
+    .width('auto')
+    .alignItems(HorizontalAlign.Start)
   }
 
   private getFileIcon(fileName: string): string {
