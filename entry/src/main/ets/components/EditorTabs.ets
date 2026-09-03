@@ -1,103 +1,128 @@
 // entry/src/main/ets/components/EditorTabs.ets
 
+import promptAction from '@ohos.promptAction';
+
 export interface EditorTab {
   path: string;
   name: string;
   isActive: boolean;
 }
 
+// 扩展 ClickEvent，增加可选的 stopPropagation 方法
+interface ClickEventWithStop extends ClickEvent {
+  stopPropagation?: () => void;
+}
+
 @Component
 export struct EditorTabs {
-
-  @Prop tabs: EditorTab[] = [];
+  @Prop tabs: string[] = [];
+  @Prop activeTab: string = '';
   @Prop version: number = 0;
+  @Prop showRunButton: boolean = false;
 
   onTabSwitch?: (path: string) => void;
   onTabClose?: (path: string) => void;
-
-  // 格式化文件名：≤20完整显示，>20显示前17+...后缀
-  private formatFileName(fullPath: string): string {
-    const parts = fullPath.split('/');
-    const fileName = parts[parts.length - 1] || fullPath;
-    if (fileName.length <= 20) {
-      return fileName;
-    }
-    const extIndex = fileName.lastIndexOf('.');
-    if (extIndex === -1) {
-      // 无扩展名，直接截取前17个字符
-      return fileName.substring(0, 17) + '...';
-    }
-    const name = fileName.substring(0, extIndex);
-    const ext = fileName.substring(extIndex);
-    const maxNameLen = 17 - ext.length; // 留给名称的最大长度
-    if (maxNameLen <= 0) {
-      // 扩展名本身较长，仅显示扩展名
-      return '...' + ext;
-    }
-    return name.substring(0, maxNameLen) + '...' + ext;
-  }
+  onRunClick?: (path: string) => void;
 
   build() {
     Row() {
       Scroll() {
         Row() {
-          ForEach(
-            this.tabs,
-            (tab: EditorTab) => {
-              Row() {
-                Text(this.formatFileName(tab.path))
-                  .fontSize(13)
-                  .fontColor(tab.isActive ? '#ffffff' : '#888888')
-                  .fontWeight(tab.isActive ? FontWeight.Bold : FontWeight.Normal)
-                  .maxLines(1)
-                  .textOverflow({ overflow: TextOverflow.Clip }) // 因为我们自己截断，不会溢出
-                  .flexShrink(0) // 防止压缩
-
-                Text('×')
-                  .fontSize(15)
-                  .fontColor(tab.isActive ? '#cccccc' : '#777777')
-                  .margin({ left: 4 })
-                  .padding({ left: 4, right: 4, top: 2, bottom: 2 })
-                  .width(24)
-                  .height(24)
-                  .textAlign(TextAlign.Center)
-                  .flexShrink(0)
-                  .onClick(() => {
-                    if (this.onTabClose) {
-                      this.onTabClose(tab.path);
-                    }
-                  })
-              }
-              .padding({ left: 10, right: 4, top: 4, bottom: 4 })
-              .margin({ right: 3 })
-              .height(32)
-              .backgroundColor(tab.isActive ? '#2d2d2d' : '#252525')
-              .borderRadius(4)
-              .border({ width: tab.isActive ? 1 : 0, color: '#3d3d3d' })
-              .flexShrink(0)      // 不压缩，内容撑开
-              .onClick(() => {
-                if (this.onTabSwitch && !tab.isActive) {
-                  this.onTabSwitch(tab.path);
-                }
-              })
-            },
-            (tab: EditorTab) => tab.path + '_' + this.version
-          )
+          ForEach(this.tabs, (tab: string) => {
+            this.buildTabItem(tab);
+          }, (tab: string) => tab)
         }
-        .padding({ left: 4, right: 4 })
         .height('100%')
         .alignItems(VerticalAlign.Center)
         .justifyContent(FlexAlign.Start)
+        .width('auto')
       }
       .scrollable(ScrollDirection.Horizontal)
-      .scrollBar(BarState.Auto)
+      .scrollBar(BarState.Off)
       .layoutWeight(1)
       .height('100%')
       .align(Alignment.Start)
+
+      if (this.showRunButton) {
+        this.buildRunButton()
+      } else {
+        Row().width(32).height(32)
+      }
     }
     .width('100%')
-    .height(36)
-    .backgroundColor('#252525')
+    .height('100%')
+    .backgroundColor('#252526')
     .padding({ left: 4, right: 4 })
+  }
+
+  @Builder
+  buildTabItem(tab: string) {
+    Row() {
+      Text(this.getFileName(tab))
+        .fontSize(13)
+        .fontColor(tab === this.activeTab ? '#FFFFFF' : '#969696')
+        .maxLines(1)
+        .textOverflow({ overflow: TextOverflow.Ellipsis })
+
+      Text('✕')
+        .fontSize(12)
+        .fontColor('#969696')
+        .margin({ left: 6 })
+        .onClick((event: ClickEvent) => {
+          // 转换为扩展接口，安全调用
+          const evt = event as ClickEventWithStop;
+          if (evt.stopPropagation) {
+            evt.stopPropagation();
+          }
+          if (this.onTabClose) {
+            this.onTabClose(tab);
+          }
+        })
+        .width(16)
+        .height(16)
+        .textAlign(TextAlign.Center)
+        .borderRadius(2)
+        .backgroundColor(tab === this.activeTab ? '#3C3C3C' : 'transparent')
+    }
+    .padding({ left: 10, right: 6, top: 4, bottom: 4 })
+    .backgroundColor(tab === this.activeTab ? '#3C3C3C' : 'transparent')
+    .borderRadius(4)
+    .margin({ right: 2 })
+    .alignItems(VerticalAlign.Center)
+    .onClick(() => {
+      if (this.onTabSwitch) {
+        this.onTabSwitch(tab);
+      }
+    })
+    .height(30)
+  }
+
+  @Builder
+  buildRunButton() {
+    Text('▶')
+      .fontSize(18)
+      .fontColor(this.activeTab ? '#FFFFFF' : '#666666')
+      .width(32)
+      .height(32)
+      .textAlign(TextAlign.Center)
+      .borderRadius(4)
+      .backgroundColor(this.activeTab ? '#007ACC' : 'transparent')
+      .onClick(() => {
+        if (this.activeTab) {
+          if (this.onRunClick) {
+            this.onRunClick(this.activeTab);
+          }
+        } else {
+          promptAction.showToast({ message: '没有打开的文件' });
+        }
+      })
+      .enabled(!!this.activeTab)
+      .margin({ left: 4 })
+  }
+
+  private getFileName(fullPath: string): string {
+    if (!fullPath) return '';
+    const parts = fullPath.split('/');
+    return parts[parts.length - 1] || fullPath;
   }
 }

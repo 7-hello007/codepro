@@ -22,6 +22,16 @@ import { QemuAgentManager } from '../lib/QemuAgentManager';
 import { QemuFileSystem } from '../lib/QemuFileSystem';
 
 import { OpenFolderDialog } from '../components/OpenFolderDialog';
+import { PluginManager } from '../plugin/PluginManager';
+import { PluginContext } from '../plugin/IPlugin';
+
+import { util } from '@kit.ArkTS';
+import preferences from '@ohos.data.preferences';
+
+// 运行配置接口
+interface RunConfig {
+  extensions: string[];
+}
 
 @Component
 export struct IdeLayout {
@@ -49,6 +59,13 @@ export struct IdeLayout {
   @State isOperationInProgress: boolean = false;
   @State operationMessage: string = '';
   @State currentRootPath: string = '/';
+  @State showRunButton: boolean = false;
+
+  // 布局模式
+  @State layoutMode: 'vscode' | 'terminal-full' = 'vscode';
+
+  // ===== 新增：QEMU 连接状态（自动更新 UI）=====
+  @State isQemuReady: boolean = false;
 
   // ============================================================
   // Dialog
@@ -77,12 +94,16 @@ export struct IdeLayout {
   private webController: webview.WebviewController = new webview.WebviewController();
   private qemuFs: QemuFileSystem = new QemuFileSystem();
 
+  private runExtensions: Set<string> = new Set();
+
   // ============================================================
   // QEMU 状态
   // ============================================================
 
   private expandedPaths: Set<string> = new Set();
   private isProcessingRefresh: boolean = false;
+
+  private connectionPollingTimer: number | null = null;
 
   // ============================================================
   // 生命周期
@@ -102,6 +123,18 @@ export struct IdeLayout {
     this.initPollingCallbacks();
     this.initOpenFolderDialog();
     this.qemuCoordinator.start();
+    // 初始化插件管理器
+    const pluginManager = PluginManager.getInstance();
+    pluginManager.initDefaultPlugins();
+
+    // 加载运行配置
+    this.loadRunConfig();
+
+    // 恢复布局模式
+    this.restoreLayoutMode();
+
+    // ===== 新增：初始设置为未连接 =====
+    this.isQemuReady = false;
   }
 
   aboutToDisappear(): void {
@@ -112,6 +145,18 @@ export struct IdeLayout {
     QemuAgentManager.release('IDELayout').catch(() => {});
     if (this.dialogController) this.dialogController.close();
     if (this.openFolderDialogController) this.openFolderDialogController.close();
+
+    // 保存布局模式
+    this.saveLayoutMode();
+
+    // ===== 清理连接状态轮询定时器 =====
+    if (this.connectionPollingTimer !== null) {
+      clearInterval(this.connectionPollingTimer);
+      this.connectionPollingTimer = null;
+    }
+
+    // ===== 新增：断开连接时重置状态 =====
+    this.isQemuReady = false;
   }
 
   // ============================================================
@@ -194,6 +239,9 @@ export struct IdeLayout {
       } else {
         this.fileOperationManager.showEmptyState('未打开任何文件');
       }
+
+      // 更新运行按钮
+      this.updateRunButtonVisibility(path);
     };
   }
 
@@ -260,11 +308,16 @@ export struct IdeLayout {
     };
 
     this.qemuCoordinator.bindServices(this.qemuFs, this.qemuFileTreeService, this.pollingService);
+    // ===== 新增：连接成功时更新状态 =====
     this.qemuCoordinator.setOnReady(() => {
       if (!this.activeTabPath) {
         this.fileOperationManager.showEmptyState('未打开任何文件');
       }
+      // 标记已连接，UI 自动更新
+      this.isQemuReady = true;
     });
+
+    this.startConnectionPolling();
   }
 
   // ============================================================
@@ -305,7 +358,7 @@ export struct IdeLayout {
   }
 
   // ============================================================
-  // 构建文件菜单（最终正确版本）
+  // 构建文件菜单
   // ============================================================
 
   @Builder
@@ -623,7 +676,130 @@ export struct IdeLayout {
     if (!newActive) {
       this.activeTabPath = '';
       this.fileOperationManager.showEmptyState('未打开任何文件');
+      this.showRunButton = false;
     }
+  }
+
+  /**
+   * 处理运行按钮点击
+   */
+  private async handleRun(filePath: string): Promise<void> {
+    try {
+      const pluginManager = PluginManager.getInstance();
+      const plugin = pluginManager.findPlugin(filePath);
+      if (!plugin) {
+        promptAction.showToast({ message: '没有可用的插件处理此文件' });
+        return;
+      }
+
+      const context: PluginContext = {
+        agent: this.qemuFs,
+        fileSystem: this.qemuFs,
+      };
+
+      await plugin.activate(context, filePath);
+      promptAction.showToast({ message: `插件 ${plugin.name} 执行成功` });
+    } catch (error) {
+      console.error('Run plugin error:', error);
+      promptAction.showToast({ message: `运行失败: ${(error as Error).message || '未知错误'}` });
+    }
+  }
+
+  // ============================================================
+  // 运行配置加载与显示控制
+  // ============================================================
+
+  private async loadRunConfig(): Promise<void> {
+    try {
+      const context = getContext(this) as common.UIAbilityContext;
+      const rawFile = await context.resourceManager.getRawFileContent('run_config.json');
+      const decoder = new util.TextDecoder('utf-8');
+      const jsonStr = decoder.decode(rawFile);
+      const config = JSON.parse(jsonStr) as RunConfig;
+      if (config.extensions && Array.isArray(config.extensions)) {
+        this.runExtensions = new Set(config.extensions);
+        console.info('[RunConfig] 加载成功，扩展名列表:', Array.from(this.runExtensions));
+      } else {
+        console.warn('[RunConfig] 配置格式错误，使用默认空集合');
+      }
+    } catch (e) {
+      console.error('[RunConfig] 加载失败:', e);
+    }
+    this.updateRunButtonVisibility(this.activeTabPath);
+  }
+
+  private updateRunButtonVisibility(filePath: string): void {
+    if (!filePath) {
+      this.showRunButton = false;
+      return;
+    }
+    const ext = this.getFileExtension(filePath);
+    const shouldShow = this.runExtensions.has(ext);
+    if (this.showRunButton !== shouldShow) {
+      this.showRunButton = shouldShow;
+    }
+  }
+
+  private getFileExtension(path: string): string {
+    const lastDot = path.lastIndexOf('.');
+    if (lastDot === -1) return '';
+    return path.substring(lastDot).toLowerCase();
+  }
+
+  // ============================================================
+  // 布局切换
+  // ============================================================
+
+  private async saveLayoutMode(): Promise<void> {
+    try {
+      const context = getContext(this) as common.UIAbilityContext;
+      const pref = await preferences.getPreferences(context, 'ide_settings');
+      await pref.put('layoutMode', this.layoutMode);
+      await pref.flush();
+      console.info('[Layout] 保存模式:', this.layoutMode);
+    } catch (e) {
+      console.error('[Layout] 保存失败:', e);
+    }
+  }
+
+  private async restoreLayoutMode(): Promise<void> {
+    try {
+      const context = getContext(this) as common.UIAbilityContext;
+      const pref = await preferences.getPreferences(context, 'ide_settings');
+      const mode = await pref.get('layoutMode', 'vscode') as string;
+      if (mode === 'vscode' || mode === 'terminal-full') {
+        this.layoutMode = mode;
+        console.info('[Layout] 恢复模式:', this.layoutMode);
+      }
+    } catch (e) {
+      console.error('[Layout] 恢复失败:', e);
+    }
+  }
+
+  private toggleLayoutMode(): void {
+    const newMode = this.layoutMode === 'vscode' ? 'terminal-full' : 'vscode';
+    this.layoutMode = newMode;
+    this.saveLayoutMode();
+  }
+
+  // ============================================================
+  // 连接状态轮询（新增）
+  // ============================================================
+
+  private startConnectionPolling(): void {
+    // 清除旧定时器
+    if (this.connectionPollingTimer !== null) {
+      clearInterval(this.connectionPollingTimer);
+      this.connectionPollingTimer = null;
+    }
+
+    this.connectionPollingTimer = setInterval(() => {
+      const ready = this.qemuFs.isReady();
+      if (this.isQemuReady !== ready) {
+        this.isQemuReady = ready;
+        console.info('[IDELayout] 连接状态变化:', ready ? '已连接' : '未连接');
+      }
+    }, 2000); // 每 2 秒检查一次
   }
 
   // ============================================================
@@ -631,7 +807,11 @@ export struct IdeLayout {
   // ============================================================
 
   private triggerLayout(): void {
-    this.editorController.triggerLayout();
+    try {
+      this.webController.runJavaScript('window.dispatchEvent(new Event("resize"));');
+    } catch (e) {
+      console.warn('[EditorController] triggerLayout 失败，Web 组件未就绪');
+    }
   }
 
   // ============================================================
@@ -640,147 +820,165 @@ export struct IdeLayout {
 
   build() {
     Column() {
-      Row() {
-        if (this.isShowSideBar) {
+      if (this.layoutMode === 'vscode') {
+        // ----- VSCode 风格布局 -----
+        Row() {
+          if (this.isShowSideBar) {
+            Column() {
+              Row() {
+                Text('📂 文件')
+                  .fontSize(14)
+                  .fontWeight(FontWeight.Bold)
+                  .fontColor('#cccccc')
+                  .padding({ left: 12, right: 4 })
+                  .bindMenu(this.buildFileMenu())
+                Text('🔄')
+                  .fontSize(14)
+                  .fontColor('#aaaaaa')
+                  .padding({ left: 4, right: 4 })
+                  .onClick(() => {
+                    this.fileOperationManager.refreshFileTree();
+                  })
+                Blank()
+              }
+              .width('100%')
+              .height(36)
+              .backgroundColor('#252525')
+              .alignItems(VerticalAlign.Center)
+
+              FileTree({
+                rootNodes: this.fileTreeData,
+                selectedPath: this.activeTabPath,
+                version: this.folderVersion,
+                onFileClick: (path) => this.onFileClick(path),
+                onDirToggle: (path) => this.onDirToggle(path),
+                onFileRightClick: (path, isDir) => this.onFileRightClick(path, isDir)
+              })
+                .width('100%')
+                .layoutWeight(1)
+                .backgroundColor('#1e1e1e')
+            }
+            .width(240)
+            .height('100%')
+            .backgroundColor('#1e1e1e')
+          }
+
+          Column()
+            .width(6)
+            .height('100%')
+            .backgroundColor('#3a3a3a')
+
           Column() {
             Row() {
-              Text('📂 文件')
-                .fontSize(14)
-                .fontWeight(FontWeight.Bold)
+              Text('☰')
+                .fontSize(18)
                 .fontColor('#cccccc')
-                .padding({ left: 12, right: 4 })
-                .bindMenu(this.buildFileMenu())
-              Text('🔄')
-                .fontSize(14)
-                .fontColor('#aaaaaa')
-                .padding({ left: 4, right: 4 })
+                .padding({ left: 10, right: 8 })
                 .onClick(() => {
-                  this.fileOperationManager.refreshFileTree();
+                  this.isShowSideBar = !this.isShowSideBar;
                 })
-              Blank()
+              EditorTabs({
+                tabs: this.openedTabs.map(tab => tab.path),
+                version: this.tabVersion,
+                activeTab: this.activeTabPath,
+                showRunButton: this.showRunButton,
+                onTabSwitch: (path) => this.onTabSwitch(path),
+                onTabClose: (path) => this.onTabClose(path),
+                onRunClick: (path) => this.handleRun(path)
+              })
+                .layoutWeight(1)
+                .height(36)
             }
             .width('100%')
             .height(36)
             .backgroundColor('#252525')
-            .alignItems(VerticalAlign.Center)
+            .padding({ left: 4, right: 4 })
 
-            FileTree({
-              rootNodes: this.fileTreeData,
-              selectedPath: this.activeTabPath,
-              version: this.folderVersion,
-              onFileClick: (path) => this.onFileClick(path),
-              onDirToggle: (path) => this.onDirToggle(path),
-              onFileRightClick: (path, isDir) => this.onFileRightClick(path, isDir)
-            })
-              .width('100%')
-              .layoutWeight(1)
-              .backgroundColor('#1e1e1e')
-          }
-          .width(240)
-          .height('100%')
-          .backgroundColor('#1e1e1e')
-        }
-
-        Column()
-          .width(6)
-          .height('100%')
-          .backgroundColor('#3a3a3a')
-
-        Column() {
-          Row() {
-            Text('☰')
-              .fontSize(18)
-              .fontColor('#cccccc')
-              .padding({ left: 10, right: 8 })
-              .onClick(() => {
-                this.isShowSideBar = !this.isShowSideBar;
-              })
-            EditorTabs({
-              tabs: this.openedTabs,
-              version: this.tabVersion,
-              onTabSwitch: (path) => this.onTabSwitch(path),
-              onTabClose: (path) => this.onTabClose(path)
-            })
-              .layoutWeight(1)
-              .height(36)
-          }
-          .width('100%')
-          .height(36)
-          .backgroundColor('#252525')
-          .padding({ left: 4, right: 4 })
-
-          Column() {
             Column() {
-              Web({
-                src: $rawfile('monaco_editor.html'),
-                controller: this.webController
-              })
-                .width('100%')
-                .height('100%')
-                .javaScriptAccess(true)
-                .zoomAccess(false)
-                .javaScriptProxy({
-                  permission: `{
-                    "javascriptProxyPermission": {
-                      "urlPermissionList": [
-                        { "scheme": "https", "host": "cdnjs.cloudflare.com", "port": "", "path": "" },
-                        { "scheme": "resource", "host": "rawfile", "port": "", "path": "" }
-                      ]
-                    }
-                  }`,
-                  object: this.editorController.getArkTSService(),
-                  name: 'arkTSService',
-                  methodList: ['onEditorReady', 'onContentChange', 'onCursorChange', 'onEditorBlur', 'log'],
+              Column() {
+                Web({
+                  src: $rawfile('monaco_editor.html'),
                   controller: this.webController
                 })
-                .onPageEnd(() => {
-                  setTimeout(() => {
-                    if (this.activeTabPath) {
-                      this.fileOperationManager.loadFileContent(this.activeTabPath);
-                    } else {
-                      this.fileOperationManager.showEmptyState('未打开任何文件');
-                    }
-                    this.triggerLayout();
-                  }, 500);
-                })
-                .onErrorReceive(() => {})
-                .onSizeChange(() => this.triggerLayout())
-            }
-            .width('100%')
-            .layoutWeight(7)
-            .backgroundColor('#1a1a1a')
-            .padding({ top: 4 })
+                  .width('100%')
+                  .height('100%')
+                  .javaScriptAccess(true)
+                  .zoomAccess(false)
+                  .javaScriptProxy({
+                    permission: `{
+                      "javascriptProxyPermission": {
+                        "urlPermissionList": [
+                          { "scheme": "https", "host": "cdnjs.cloudflare.com", "port": "", "path": "" },
+                          { "scheme": "resource", "host": "rawfile", "port": "", "path": "" }
+                        ]
+                      }
+                    }`,
+                    object: this.editorController.getArkTSService(),
+                    name: 'arkTSService',
+                    methodList: ['onEditorReady', 'onContentChange', 'onCursorChange', 'onEditorBlur', 'log'],
+                    controller: this.webController
+                  })
+                  .onPageEnd(() => {
+                    setTimeout(() => {
+                      if (this.activeTabPath) {
+                        this.fileOperationManager.loadFileContent(this.activeTabPath);
+                      } else {
+                        this.fileOperationManager.showEmptyState('未打开任何文件');
+                      }
+                      this.triggerLayout();
+                    }, 500);
+                  })
+                  .onErrorReceive(() => {})
+                // .onSizeChange(() => this.triggerLayout())  // 已移除，避免过早调用
+              }
+              .width('100%')
+              .layoutWeight(7)
+              .backgroundColor('#1a1a1a')
+              .padding({ top: 4 })
 
-            Column() {
-              Divider()
-                .height(2)
-                .backgroundColor('#3a3a3c')
-                .width('100%')
-            }
-            .width('100%')
-            .height(2)
+              Column() {
+                Divider()
+                  .height(2)
+                  .backgroundColor('#3a3a3c')
+                  .width('100%')
+              }
+              .width('100%')
+              .height(2)
 
-            Column() {
-              WebTerminal({ virtKeyEnabled: false })
+              Column() {
+                WebTerminal({ virtKeyEnabled: false })
+              }
+              .width('100%')
+              .layoutWeight(3)
+              .backgroundColor('#0d0d0d')
+              .padding({ left: 8 })
             }
             .width('100%')
-            .layoutWeight(3)
-            .backgroundColor('#0d0d0d')
-            .padding({ left: 8 })
+            .layoutWeight(1)
+            .padding(0)
           }
-          .width('100%')
           .layoutWeight(1)
+          .height('100%')
+          .backgroundColor('#1e1e1e')
           .padding(0)
         }
-        .layoutWeight(1)
+        .width('100%')
         .height('100%')
+        .layoutWeight(1)
+      } else {
+        // ----- 终端全屏模式（显示功能键）-----
+        Column() {
+          WebTerminal({ virtKeyEnabled: true })
+            .width('100%')
+            .layoutWeight(1)
+            .backgroundColor('#0d0d0d')
+        }
+        .width('100%')
+        .layoutWeight(1)
         .backgroundColor('#1e1e1e')
-        .padding(0)
       }
-      .width('100%')
-      .height('100%')
-      .layoutWeight(1)
 
+      // 状态栏始终显示
       this.buildStatusBar()
     }
     .width('100%')
@@ -795,40 +993,77 @@ export struct IdeLayout {
   @Builder
   buildStatusBar() {
     Row() {
-      Row() {
-        Text('行 ' + this.currentLine)
-          .fontSize(12)
-          .fontColor('#cccccc')
-        Text('列 ' + this.currentColumn)
-          .fontSize(12)
-          .fontColor('#cccccc')
-          .margin({ left: 10 })
-        if (this.currentFileType) {
-          Text(this.currentFileType)
+      // ===== 左侧区域 =====
+      if (this.layoutMode === 'terminal-full') {
+        // ----- 全屏模式：显示终端连接状态（自动刷新）-----
+        Row() {
+          Text('Alpine Linux')
+            .fontSize(14)
+            .fontColor('#4fc3f7')
+            .margin({ right: 6 })
+
+          Text('终端')
+            .fontSize(12)
+            .fontColor('#4fc3f7')
+            .margin({ right: 8 })
+
+          // 使用 @State 变量 isQemuReady，自动更新
+          if (this.isQemuReady) {
+            Text('已连接')
+              .fontSize(12)
+              .fontColor('#00ff00')
+              .margin({ right: 8 })
+          } else {
+            Text('未连接')
+              .fontSize(12)
+              .fontColor('#ff6b6b')
+              .margin({ right: 8 })
+          }
+        }
+        .padding({ left: 16 })
+        .height('100%')
+        .alignItems(VerticalAlign.Center)
+        .flexShrink(1)
+
+      } else {
+        // ----- VSCode 模式：显示编辑器信息 -----
+        Row() {
+          Text('行 ' + this.currentLine)
+            .fontSize(12)
+            .fontColor('#cccccc')
+          Text('列 ' + this.currentColumn)
             .fontSize(12)
             .fontColor('#cccccc')
             .margin({ left: 10 })
+          if (this.currentFileType) {
+            Text(this.currentFileType)
+              .fontSize(12)
+              .fontColor('#cccccc')
+              .margin({ left: 10 })
+          }
+          Text('UTF-8')
+            .fontSize(12)
+            .fontColor('#cccccc')
+            .margin({ left: 10 })
+          Text(this.fileOperationManager.getDisplayPath(this.currentFilePath))
+            .fontSize(12)
+            .fontColor('#cccccc')
+            .margin({ left: 10 })
+            .maxLines(1)
+            .textOverflow({ overflow: TextOverflow.Ellipsis })
+            .layoutWeight(1)
+            .flexShrink(1)
         }
-        Text('UTF-8')
-          .fontSize(12)
-          .fontColor('#cccccc')
-          .margin({ left: 10 })
-        Text(this.fileOperationManager.getDisplayPath(this.currentFilePath))
-          .fontSize(12)
-          .fontColor('#cccccc')
-          .margin({ left: 10 })
-          .maxLines(1)
-          .textOverflow({ overflow: TextOverflow.Ellipsis })
-          .layoutWeight(1)
-          .flexShrink(1)
+        .padding({ left: 16 })
+        .height('100%')
+        .alignItems(VerticalAlign.Center)
+        .flexShrink(1)
       }
-      .padding({ left: 16 })
-      .height('100%')
-      .alignItems(VerticalAlign.Center)
-      .flexShrink(1)
 
+      // ===== 中间空白 =====
       Blank()
 
+      // ===== 右侧区域（共用）=====
       Row() {
         if (this.isOperationInProgress) {
           Row() {
@@ -884,6 +1119,16 @@ export struct IdeLayout {
         Text('LF')
           .fontSize(12)
           .fontColor('#cccccc')
+          .flexShrink(0)
+
+        // 设置按钮
+        Text('⚙')
+          .fontSize(16)
+          .fontColor('#cccccc')
+          .margin({ left: 12 })
+          .onClick(() => {
+            this.toggleLayoutMode();
+          })
           .flexShrink(0)
       }
       .padding({ right: 16 })

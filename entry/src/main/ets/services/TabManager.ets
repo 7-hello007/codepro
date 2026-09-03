@@ -25,13 +25,15 @@ export class TabManager {
     const name = path.split('/').pop() || path;
     const newTabs: EditorTab[] = [];
     for (const tab of this.openedTabs) {
-      newTabs.push({
+      const newTab: EditorTab = {
         path: tab.path,
         name: tab.name,
         isActive: false
-      });
+      };
+      newTabs.push(newTab);
     }
-    newTabs.push({ path, name, isActive: true });
+    const newTab: EditorTab = { path, name, isActive: true };
+    newTabs.push(newTab);
     this.openedTabs = newTabs;
     this.activePath = path;
     this.notifyChanged();
@@ -41,11 +43,12 @@ export class TabManager {
     if (this.activePath === path) return;
     const newTabs: EditorTab[] = [];
     for (const tab of this.openedTabs) {
-      newTabs.push({
+      const newTab: EditorTab = {
         path: tab.path,
         name: tab.name,
         isActive: tab.path === path
-      });
+      };
+      newTabs.push(newTab);
     }
     this.openedTabs = newTabs;
     this.activePath = path;
@@ -79,11 +82,12 @@ export class TabManager {
     const activeTab = newTabs[newIndex];
     const updatedTabs: EditorTab[] = [];
     for (let i = 0; i < newTabs.length; i++) {
-      updatedTabs.push({
+      const updatedTab: EditorTab = {
         path: newTabs[i].path,
         name: newTabs[i].name,
         isActive: i === newIndex
-      });
+      };
+      updatedTabs.push(updatedTab);
     }
     this.openedTabs = updatedTabs;
     this.activePath = activeTab.path;
