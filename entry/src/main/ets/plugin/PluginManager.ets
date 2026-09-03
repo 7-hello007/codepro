@@ -1,6 +1,7 @@
 // entry/src/main/ets/plugin/PluginManager.ets
 
 import { IPlugin } from './IPlugin';
+import { HtmlPreviewPlugin } from './HtmlPreviewPlugin';
 
 export class PluginManager {
   private static instance: PluginManager;
@@ -21,22 +22,28 @@ export class PluginManager {
       return;
     }
     this.plugins.push(plugin);
-    console.info(`Plugin registered: ${plugin.id} (${plugin.name})`);
+    console.info(`[PluginManager] Plugin registered: ${plugin.id} (${plugin.name})`);
   }
 
   public findPlugin(filePath: string): IPlugin | undefined {
-    return this.plugins.find(p => p.canHandle(filePath));
+    console.info(`[PluginManager] findPlugin 查找文件: ${filePath}`);
+    for (const plugin of this.plugins) {
+      if (plugin.canHandle(filePath)) {
+        console.info(`[PluginManager] 匹配到插件: ${plugin.id}`);
+        return plugin;
+      }
+    }
+    console.warn(`[PluginManager] 未找到匹配的插件`);
+    return undefined;
   }
 
   public getAllPlugins(): IPlugin[] {
     return [...this.plugins];
   }
 
-  /**
-   * 初始化默认插件，目前为空，阶段6.5会注册 HTML 预览插件
-   */
   public initDefaultPlugins(): void {
-    // 后续在此注册插件
-    console.info('Default plugins initialized (none yet).');
+    console.info('[PluginManager] 初始化默认插件');
+    this.register(new HtmlPreviewPlugin());
+    console.info('[PluginManager] 默认插件初始化完成，当前插件数:', this.plugins.length);
   }
 }

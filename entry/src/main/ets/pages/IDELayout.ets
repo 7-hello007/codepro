@@ -27,8 +27,11 @@ import { PluginContext } from '../plugin/IPlugin';
 
 import { util } from '@kit.ArkTS';
 import preferences from '@ohos.data.preferences';
+import { PluginListDialog } from '../components/PluginListDialog';
 
-// 运行配置接口
+import { TerminalManager, TerminalSession } from '../services/TerminalManager';
+import { TerminalTabBar } from '../components/TerminalTabBar';
+
 interface RunConfig {
   extensions: string[];
 }
@@ -61,11 +64,12 @@ export struct IdeLayout {
   @State currentRootPath: string = '/';
   @State showRunButton: boolean = false;
 
-  // 布局模式
   @State layoutMode: 'vscode' | 'terminal-full' = 'vscode';
-
-  // ===== 新增：QEMU 连接状态（自动更新 UI）=====
   @State isQemuReady: boolean = false;
+
+  // 多终端状态
+  @State terminalSessions: TerminalSession[] = [];
+  @State activeTerminalId: string = '';
 
   // ============================================================
   // Dialog
@@ -104,6 +108,7 @@ export struct IdeLayout {
   private isProcessingRefresh: boolean = false;
 
   private connectionPollingTimer: number | null = null;
+  private pluginListDialogController?: CustomDialogController;
 
   // ============================================================
   // 生命周期
@@ -111,6 +116,7 @@ export struct IdeLayout {
 
   aboutToAppear(): void {
     const context = getContext(this) as common.UIAbilityContext;
+    AppStorage.setOrCreate('abilityContext', context);
     this.hostFileService.initializeWorkDirectory(context);
     this.initEditor();
     this.initFileOperationManager();
@@ -123,18 +129,28 @@ export struct IdeLayout {
     this.initPollingCallbacks();
     this.initOpenFolderDialog();
     this.qemuCoordinator.start();
-    // 初始化插件管理器
     const pluginManager = PluginManager.getInstance();
     pluginManager.initDefaultPlugins();
 
-    // 加载运行配置
     this.loadRunConfig();
-
-    // 恢复布局模式
     this.restoreLayoutMode();
 
-    // ===== 新增：初始设置为未连接 =====
     this.isQemuReady = false;
+    this.initPluginListDialog();
+
+    // 初始化终端管理器
+    const terminalManager = TerminalManager.getInstance();
+    terminalManager.initDefault();
+    this.terminalSessions = terminalManager.getSessions();
+    this.activeTerminalId = terminalManager.getActiveId();
+
+    terminalManager.onSessionsChanged = (sessions) => {
+      this.terminalSessions = sessions;
+    };
+
+    terminalManager.onActiveChanged = (id) => {
+      this.activeTerminalId = id;
+    };
   }
 
   aboutToDisappear(): void {
@@ -146,16 +162,13 @@ export struct IdeLayout {
     if (this.dialogController) this.dialogController.close();
     if (this.openFolderDialogController) this.openFolderDialogController.close();
 
-    // 保存布局模式
     this.saveLayoutMode();
 
-    // ===== 清理连接状态轮询定时器 =====
     if (this.connectionPollingTimer !== null) {
       clearInterval(this.connectionPollingTimer);
       this.connectionPollingTimer = null;
     }
 
-    // ===== 新增：断开连接时重置状态 =====
     this.isQemuReady = false;
   }
 
@@ -240,7 +253,6 @@ export struct IdeLayout {
         this.fileOperationManager.showEmptyState('未打开任何文件');
       }
 
-      // 更新运行按钮
       this.updateRunButtonVisibility(path);
     };
   }
@@ -279,7 +291,6 @@ export struct IdeLayout {
 
   private initQemuServices(): void {
     this.qemuFileTreeService.bindFileSystem(this.qemuFs);
-    // 加载根目录
     this.qemuFileTreeService.loadRootDirectory('/');
 
     this.qemuFileTreeService.onDataChanged = (nodes, version) => {
@@ -308,12 +319,11 @@ export struct IdeLayout {
     };
 
     this.qemuCoordinator.bindServices(this.qemuFs, this.qemuFileTreeService, this.pollingService);
-    // ===== 新增：连接成功时更新状态 =====
+
     this.qemuCoordinator.setOnReady(() => {
       if (!this.activeTabPath) {
         this.fileOperationManager.showEmptyState('未打开任何文件');
       }
-      // 标记已连接，UI 自动更新
       this.isQemuReady = true;
     });
 
@@ -331,6 +341,23 @@ export struct IdeLayout {
           this.changeRootDirectory(path);
         }
       })
+    });
+  }
+
+  private initPluginListDialog(): void {
+    const plugins = PluginManager.getInstance().getAllPlugins();
+    this.pluginListDialogController = new CustomDialogController({
+      builder: PluginListDialog({
+        plugins: plugins,
+        controller: this.pluginListDialogController,
+        onClose: () => {
+          this.pluginListDialogController?.close();
+        }
+      }),
+      autoCancel: true,
+      alignment: DialogAlignment.TopStart,
+      customStyle: true,
+      maskColor: 'rgba(0,0,0,0.6)'
     });
   }
 
@@ -370,7 +397,21 @@ export struct IdeLayout {
         })
       MenuItem({ content: '🔌 插件' })
         .onClick(() => {
-          promptAction.showToast({ message: '插件功能开发中', duration: 1000 });
+          const plugins = PluginManager.getInstance().getAllPlugins();
+          this.pluginListDialogController = new CustomDialogController({
+            builder: PluginListDialog({
+              plugins: plugins,
+              controller: this.pluginListDialogController,
+              onClose: () => {
+                this.pluginListDialogController?.close();
+              }
+            }),
+            autoCancel: true,
+            alignment: DialogAlignment.TopStart,
+            customStyle: true,
+            maskColor: 'rgba(0,0,0,0.6)'
+          });
+          this.pluginListDialogController?.open();
         })
     }
   }
@@ -680,21 +721,19 @@ export struct IdeLayout {
     }
   }
 
-  /**
-   * 处理运行按钮点击
-   */
   private async handleRun(filePath: string): Promise<void> {
+    console.info('[IDELayout] handleRun 被调用，文件:', filePath);
     try {
       const pluginManager = PluginManager.getInstance();
       const plugin = pluginManager.findPlugin(filePath);
       if (!plugin) {
         promptAction.showToast({ message: '没有可用的插件处理此文件' });
+        console.warn('[IDELayout] 未找到插件');
         return;
       }
 
       const context: PluginContext = {
-        agent: this.qemuFs,
-        fileSystem: this.qemuFs,
+        qemuFs: this.qemuFs,
       };
 
       await plugin.activate(context, filePath);
@@ -783,11 +822,10 @@ export struct IdeLayout {
   }
 
   // ============================================================
-  // 连接状态轮询（新增）
+  // 连接状态轮询
   // ============================================================
 
   private startConnectionPolling(): void {
-    // 清除旧定时器
     if (this.connectionPollingTimer !== null) {
       clearInterval(this.connectionPollingTimer);
       this.connectionPollingTimer = null;
@@ -799,7 +837,7 @@ export struct IdeLayout {
         this.isQemuReady = ready;
         console.info('[IDELayout] 连接状态变化:', ready ? '已连接' : '未连接');
       }
-    }, 2000); // 每 2 秒检查一次
+    }, 2000);
   }
 
   // ============================================================
@@ -815,14 +853,34 @@ export struct IdeLayout {
   }
 
   // ============================================================
+  // 多终端操作
+  // ============================================================
+
+  private createTerminal(): void {
+    const manager = TerminalManager.getInstance();
+    manager.createTerminal();
+  }
+
+  private switchTerminal(id: string): void {
+    const manager = TerminalManager.getInstance();
+    manager.switchTerminal(id);
+  }
+
+  private closeTerminal(id: string): void {
+    const manager = TerminalManager.getInstance();
+    manager.closeTerminal(id);
+  }
+
+  // ============================================================
   // UI Build
   // ============================================================
 
   build() {
     Column() {
       if (this.layoutMode === 'vscode') {
-        // ----- VSCode 风格布局 -----
+        // ----- VSCode 风格布局（含多终端）-----
         Row() {
+          // 侧边栏
           if (this.isShowSideBar) {
             Column() {
               Row() {
@@ -863,12 +921,15 @@ export struct IdeLayout {
             .backgroundColor('#1e1e1e')
           }
 
+          // 分割线
           Column()
             .width(6)
             .height('100%')
             .backgroundColor('#3a3a3a')
 
+          // 编辑器 + 终端区域
           Column() {
+            // 顶部标签栏（编辑器标签 + 运行按钮）
             Row() {
               Text('☰')
                 .fontSize(18)
@@ -894,6 +955,7 @@ export struct IdeLayout {
             .backgroundColor('#252525')
             .padding({ left: 4, right: 4 })
 
+            // 编辑器主体
             Column() {
               Column() {
                 Web({
@@ -929,13 +991,13 @@ export struct IdeLayout {
                     }, 500);
                   })
                   .onErrorReceive(() => {})
-                // .onSizeChange(() => this.triggerLayout())  // 已移除，避免过早调用
               }
               .width('100%')
               .layoutWeight(7)
               .backgroundColor('#1a1a1a')
               .padding({ top: 4 })
 
+              // 分割线
               Column() {
                 Divider()
                   .height(2)
@@ -945,13 +1007,43 @@ export struct IdeLayout {
               .width('100%')
               .height(2)
 
+              // ----- 多终端区域（底部）-----
+              // ----- 多终端区域（底部）-----
               Column() {
-                WebTerminal({ virtKeyEnabled: false })
+                // 终端标签栏
+                TerminalTabBar({
+                  sessions: this.terminalSessions,
+                  activeId: this.activeTerminalId,
+                  onSwitch: (id) => this.switchTerminal(id),
+                  onClose: (id) => this.closeTerminal(id),
+                  onCreate: () => this.createTerminal()
+                })
+                  .width('100%')
+                  .height(32)
+
+                // 终端内容区域（同时渲染所有终端，通过 visibility 控制显示）
+                Stack() {
+                  ForEach(this.terminalSessions, (session: TerminalSession) => {
+                    WebTerminal({
+                      virtKeyEnabled: false
+                    })
+                      .width('100%')
+                      .height('100%')
+                      .backgroundColor('#0d0d0d')
+                      .padding({ left: 8 })
+                      .visibility(session.id === this.activeTerminalId ? Visibility.Visible : Visibility.Hidden)
+                  }, (session: TerminalSession) => session.id)
+                }
+                .width('100%')
+                .layoutWeight(1)
+                .backgroundColor('#0d0d0d')
               }
               .width('100%')
               .layoutWeight(3)
-              .backgroundColor('#0d0d0d')
-              .padding({ left: 8 })
+              .padding(0)
+              .width('100%')
+              .layoutWeight(3)
+              .padding(0)
             }
             .width('100%')
             .layoutWeight(1)
@@ -966,7 +1058,7 @@ export struct IdeLayout {
         .height('100%')
         .layoutWeight(1)
       } else {
-        // ----- 终端全屏模式（显示功能键）-----
+        // ----- 终端全屏模式（只显示单个终端，功能键保留）-----
         Column() {
           WebTerminal({ virtKeyEnabled: true })
             .width('100%')
@@ -993,21 +1085,16 @@ export struct IdeLayout {
   @Builder
   buildStatusBar() {
     Row() {
-      // ===== 左侧区域 =====
       if (this.layoutMode === 'terminal-full') {
-        // ----- 全屏模式：显示终端连接状态（自动刷新）-----
         Row() {
           Text('Alpine Linux')
             .fontSize(14)
             .fontColor('#4fc3f7')
             .margin({ right: 6 })
-
           Text('终端')
             .fontSize(12)
             .fontColor('#4fc3f7')
             .margin({ right: 8 })
-
-          // 使用 @State 变量 isQemuReady，自动更新
           if (this.isQemuReady) {
             Text('已连接')
               .fontSize(12)
@@ -1024,9 +1111,7 @@ export struct IdeLayout {
         .height('100%')
         .alignItems(VerticalAlign.Center)
         .flexShrink(1)
-
       } else {
-        // ----- VSCode 模式：显示编辑器信息 -----
         Row() {
           Text('行 ' + this.currentLine)
             .fontSize(12)
@@ -1060,10 +1145,8 @@ export struct IdeLayout {
         .flexShrink(1)
       }
 
-      // ===== 中间空白 =====
       Blank()
 
-      // ===== 右侧区域（共用）=====
       Row() {
         if (this.isOperationInProgress) {
           Row() {
@@ -1121,7 +1204,6 @@ export struct IdeLayout {
           .fontColor('#cccccc')
           .flexShrink(0)
 
-        // 设置按钮
         Text('⚙')
           .fontSize(16)
           .fontColor('#cccccc')

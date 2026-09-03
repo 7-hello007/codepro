@@ -29,8 +29,21 @@ export class QemuFileSystem {
       console.error('[QemuFileSystem] Agent is not bound');
       return null;
     }
-    // 注意：这里未使用 cd，直接执行
     return await this.agent.execAndGetOutput(cmd, args);
+  }
+
+  /**
+   * 公开执行命令方法（供插件调用）
+   * @param program 程序路径（如 /bin/sh）
+   * @param args 参数列表
+   * @returns 命令输出
+   */
+  public async execAndGetOutput(program: string, args: string[]): Promise<string> {
+    const result = await this.exec(program, args);
+    if (result === null) {
+      throw new Error('[QemuFileSystem] 执行命令失败: ' + program + ' ' + args.join(' '));
+    }
+    return result;
   }
 
   /**
@@ -40,8 +53,6 @@ export class QemuFileSystem {
     const output = await this.exec('/bin/pwd');
     return output ? output.trim() : this.currentPath;
   }
-
-  // 在 QemuFileSystem 类中添加以下方法
 
   /**
    * 创建目录（支持递归）
@@ -95,7 +106,7 @@ export class QemuFileSystem {
     }
     try {
       const output = await this.agent.execAndGetOutput('/bin/cat', [path]);
-      return output; // 已是 UTF-8 字符串
+      return output;
     } catch (e) {
       console.error(`[QemuFileSystem] readFile failed: ${path}`, e);
       return null;
@@ -114,7 +125,6 @@ export class QemuFileSystem {
       return false;
     }
     try {
-      // 使用 printf 转义单引号，避免注入
       const escaped = content.replace(/'/g, "'\\''");
       const cmd = `printf '%s' '${escaped}' > ${path}`;
       const result = await this.agent.execAndGetOutput('/bin/sh', ['-c', cmd]);
@@ -133,7 +143,6 @@ export class QemuFileSystem {
     const nodes: FileNode[] = [];
 
     for (const line of lines) {
-      // 正则匹配：权限(10字符) + 空格 + 硬链接数 + 属主 + 组 + 大小 + 月 + 日 + 时间/年份 + 文件名
       const parts = line.match(
         /^([\-dl])([\-rwxs]){9}\s+\d+\s+\S+\s+\S+\s+(\d+)\s+(\S+)\s+(\S+)\s+(\S+)\s+(.*)$/
       );
