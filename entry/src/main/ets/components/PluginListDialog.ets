@@ -16,7 +16,6 @@ export struct PluginListDialog {
 
   build() {
     Column() {
-      // 标题栏
       Row() {
         Text('🔌 插件管理')
           .fontSize(20)
@@ -63,14 +62,12 @@ export struct PluginListDialog {
     }
     .width('90%')
     .constraintSize({ maxWidth: 600 })
-    .height('auto')                     // 高度自适应
+    .height('80%')
     .constraintSize({ maxHeight: 600 })
-    .margin({ top: 40 })                // 顶部留白
     .backgroundColor('#1e1e1e')
     .borderRadius(12)
     .padding(16)
-    .alignItems(HorizontalAlign.Start)   // 水平左对齐
-    .justifyContent(FlexAlign.Start)     // 垂直顶部对齐
+    .justifyContent(FlexAlign.Start)   // 内容靠顶部
   }
 
   @Builder

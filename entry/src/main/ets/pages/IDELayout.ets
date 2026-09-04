@@ -29,9 +29,6 @@ import { util } from '@kit.ArkTS';
 import preferences from '@ohos.data.preferences';
 import { PluginListDialog } from '../components/PluginListDialog';
 
-import { TerminalManager, TerminalSession } from '../services/TerminalManager';
-import { TerminalTabBar } from '../components/TerminalTabBar';
-
 interface RunConfig {
   extensions: string[];
 }
@@ -66,10 +63,6 @@ export struct IdeLayout {
 
   @State layoutMode: 'vscode' | 'terminal-full' = 'vscode';
   @State isQemuReady: boolean = false;
-
-  // 多终端状态
-  @State terminalSessions: TerminalSession[] = [];
-  @State activeTerminalId: string = '';
 
   // ============================================================
   // Dialog
@@ -137,20 +130,6 @@ export struct IdeLayout {
 
     this.isQemuReady = false;
     this.initPluginListDialog();
-
-    // 初始化终端管理器
-    const terminalManager = TerminalManager.getInstance();
-    terminalManager.initDefault();
-    this.terminalSessions = terminalManager.getSessions();
-    this.activeTerminalId = terminalManager.getActiveId();
-
-    terminalManager.onSessionsChanged = (sessions) => {
-      this.terminalSessions = sessions;
-    };
-
-    terminalManager.onActiveChanged = (id) => {
-      this.activeTerminalId = id;
-    };
   }
 
   aboutToDisappear(): void {
@@ -355,7 +334,7 @@ export struct IdeLayout {
         }
       }),
       autoCancel: true,
-      alignment: DialogAlignment.TopStart,
+      alignment: DialogAlignment.Center,
       customStyle: true,
       maskColor: 'rgba(0,0,0,0.6)'
     });
@@ -407,7 +386,7 @@ export struct IdeLayout {
               }
             }),
             autoCancel: true,
-            alignment: DialogAlignment.TopStart,
+            alignment: DialogAlignment.Center,
             customStyle: true,
             maskColor: 'rgba(0,0,0,0.6)'
           });
@@ -853,34 +832,13 @@ export struct IdeLayout {
   }
 
   // ============================================================
-  // 多终端操作
-  // ============================================================
-
-  private createTerminal(): void {
-    const manager = TerminalManager.getInstance();
-    manager.createTerminal();
-  }
-
-  private switchTerminal(id: string): void {
-    const manager = TerminalManager.getInstance();
-    manager.switchTerminal(id);
-  }
-
-  private closeTerminal(id: string): void {
-    const manager = TerminalManager.getInstance();
-    manager.closeTerminal(id);
-  }
-
-  // ============================================================
   // UI Build
   // ============================================================
 
   build() {
     Column() {
       if (this.layoutMode === 'vscode') {
-        // ----- VSCode 风格布局（含多终端）-----
         Row() {
-          // 侧边栏
           if (this.isShowSideBar) {
             Column() {
               Row() {
@@ -921,15 +879,12 @@ export struct IdeLayout {
             .backgroundColor('#1e1e1e')
           }
 
-          // 分割线
           Column()
             .width(6)
             .height('100%')
             .backgroundColor('#3a3a3a')
 
-          // 编辑器 + 终端区域
           Column() {
-            // 顶部标签栏（编辑器标签 + 运行按钮）
             Row() {
               Text('☰')
                 .fontSize(18)
@@ -955,7 +910,6 @@ export struct IdeLayout {
             .backgroundColor('#252525')
             .padding({ left: 4, right: 4 })
 
-            // 编辑器主体
             Column() {
               Column() {
                 Web({
@@ -997,7 +951,6 @@ export struct IdeLayout {
               .backgroundColor('#1a1a1a')
               .padding({ top: 4 })
 
-              // 分割线
               Column() {
                 Divider()
                   .height(2)
@@ -1007,43 +960,13 @@ export struct IdeLayout {
               .width('100%')
               .height(2)
 
-              // ----- 多终端区域（底部）-----
-              // ----- 多终端区域（底部）-----
               Column() {
-                // 终端标签栏
-                TerminalTabBar({
-                  sessions: this.terminalSessions,
-                  activeId: this.activeTerminalId,
-                  onSwitch: (id) => this.switchTerminal(id),
-                  onClose: (id) => this.closeTerminal(id),
-                  onCreate: () => this.createTerminal()
-                })
-                  .width('100%')
-                  .height(32)
-
-                // 终端内容区域（同时渲染所有终端，通过 visibility 控制显示）
-                Stack() {
-                  ForEach(this.terminalSessions, (session: TerminalSession) => {
-                    WebTerminal({
-                      virtKeyEnabled: false
-                    })
-                      .width('100%')
-                      .height('100%')
-                      .backgroundColor('#0d0d0d')
-                      .padding({ left: 8 })
-                      .visibility(session.id === this.activeTerminalId ? Visibility.Visible : Visibility.Hidden)
-                  }, (session: TerminalSession) => session.id)
-                }
-                .width('100%')
-                .layoutWeight(1)
-                .backgroundColor('#0d0d0d')
+                WebTerminal({ virtKeyEnabled: false })
               }
               .width('100%')
               .layoutWeight(3)
-              .padding(0)
-              .width('100%')
-              .layoutWeight(3)
-              .padding(0)
+              .backgroundColor('#0d0d0d')
+              .padding({ left: 8 })
             }
             .width('100%')
             .layoutWeight(1)
@@ -1058,7 +981,6 @@ export struct IdeLayout {
         .height('100%')
         .layoutWeight(1)
       } else {
-        // ----- 终端全屏模式（只显示单个终端，功能键保留）-----
         Column() {
           WebTerminal({ virtKeyEnabled: true })
             .width('100%')
@@ -1070,7 +992,6 @@ export struct IdeLayout {
         .backgroundColor('#1e1e1e')
       }
 
-      // 状态栏始终显示
       this.buildStatusBar()
     }
     .width('100%')
