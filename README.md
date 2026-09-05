@@ -1,170 +1,185 @@
-# HiSH
+# CodePro
 
-[GitHub](https://github.com/harmoninux/HiSH) | [GitCode](https://gitcode.com/realhackeris/HiSH) | [Gitee](https://gitee.com/hackeris/HiSH) | [English](README_EN.md)
+**基于 HiSH 的鸿蒙轻量级代码编辑器**
 
-在HarmonyOS设备上运行Linux Shell。基于[qemu-ohos](https://github.com/harmoninux/qemu)，支持2in1(PC)、平板和手机。
+CodePro 是运行在鸿蒙设备上的集成开发环境（IDE），基于 HiSH（鸿蒙 QEMU 虚拟机管理器）构建。它采用类似 VSCode 的布局，集成了文件管理、代码编辑（Monaco Editor）、终端（WebTerminal）和插件系统，让开发者在平板或大屏设备上直接编写、编译和运行代码。
 
-![多设备运行](docs/images/devices.png)
+![样式](media/codepro.jpg)
+---
 
-## 如何获取
+## ✨ 主要功能
 
-可以选择下面任一方法获取HiSH：
+- **VSCode 风格界面**：侧边栏、标签页、代码编辑器、终端，支持布局切换（标准/全屏终端）
+- **文件树管理**：基于 QEMU 虚拟机内文件系统，支持目录展开/收起、右键新建/删除
+- **Monaco Editor 集成**：语法高亮、自动保存、光标位置显示
+- **终端集成**：基于 WebTerminal，支持虚拟功能键（ESC、Fn、CTRL 等）
+- **端口映射与预览**：自动启动 Python HTTP 服务，一键预览 HTML 文件（含热加载支持）
+- **插件系统**：支持自定义插件，内置 HTML 预览插件
+- **状态栏信息**：显示行/列、文件路径、WiFi 状态、连接状态、操作进度
+- **持久化配置**：布局模式、端口映射等自动保存
 
-- 通过[应用市场](https://appgallery.huawei.com/app/detail?id=app.hackeris.hish)安装（因应用市场政策限制，不支持JIT，运行效率一般）
-- 从[Releases](https://github.com/harmoninux/HiSH/releases)下载hap文件，自行签名后安装到设备或模拟器（支持JIT，运行效率更高。安装方法见：[使用教程](https://github.com/harmoninux/HiSH/discussions/130)）
-- 使用 DevEco Studio 编译源码安装，参考 [构建并安装HAP](#构建hap)（支持JIT，运行效率更高）
+---
 
-## 核心功能
+## 📦 技术栈
 
-- 完整的arm64 Linux内核
-- 网络支持，并支持端口转发
-- Alpine Linux根文件系统
-- 虚拟按键（Tab/Ctrl/Esc/Shift/Fn/方向键）
-- 共享文件夹
-- JIT（仅开发者可用）
-- 镜像导入（[Ubuntu24.04镜像](https://github.com/harmoninux/linux-config/releases/download/rootfs-20251213/ubuntu-base-24.04.zip) / [Debian12镜像](https://github.com/harmoninux/linux-config/releases/download/release-20251129-debian/debian12.zip)）
+- **框架**：ArkTS（鸿蒙 ArkUI）
+- **编辑器**：Monaco Editor（通过 WebView 加载）
+- **终端**：HiSH 内置的 WebTerminal（基于 xterm.js）
+- **后端通信**：QemuAgent（通过 socket 与虚拟机内 QGA 通信）
+- **构建工具**：DevEco Studio + hvigor
 
-## 使用指南
+---
 
-参考 [使用指南](docs/guide)
+## 🚀 快速开始
 
-## 讨论交流
+### 环境要求
 
-QQ群二维码
+- 鸿蒙设备（平板/2in1）或模拟器
+- DevEco Studio 5.0.3.xxx 及以上
+- HiSH 已正确配置（虚拟机镜像、QGA 服务）
 
-<img src="docs/images/qq_group.jpg" width="200"/>
+### 克隆与编译
 
-## 授权许可
-
-使用本项目代码，按照[惯例](https://www.n.cn/share/r1/d256b59a563047a3a052e58042ae2547)需在软件本体"关于"中注明基于本项目（HiSH）以及本项目的仓库地址。
-
-# 构建指南
-
-- HAP包
-- libqemu-system库（可选）
-- Linux内核（可选）
-- 根文件系统（可选）
-
-## 构建HAP
-
-* 下载安装 [DevEco Studio](https://developer.huawei.com/consumer/cn/deveco-studio/)
-* 克隆代码到本地
-* 仓库里执行 `git submodule update --init --recursive` 拉取子模块代码
-* 复制`build-profile.template.json5`到`build-profile.json5`
-* 下载以下文件到指定位置：
-  - [entry/libs.zip](https://github.com/harmoninux/qemu/releases/download/hish-20260110/libs.zip)（解压到`entry/libs`）
-  - [entry/src/main/resources/rawfile/vm/kernel_aarch64](https://github.com/harmoninux/linux-config/releases/download/kernel-20260228/kernel_aarch64)
-  - [entry/src/main/resources/rawfile/vm/rootfs_aarch64.qcow2](https://github.com/harmoninux/linux-config/releases/download/rootfs-20260117/rootfs_aarch64.qcow2)
-* 在DevEco Studio中构建项目
-* 签名后在设备或模拟器上运行。参考 [本地真机运行应用](https://developer.huawei.com/consumer/cn/doc/harmonyos-guides/ide-run-device) | [自动签名-未关联注册应用](https://developer.huawei.com/consumer/cn/doc/harmonyos-guides/ide-signing#section151231211105010)
-
-## 构建libqemu-system（可选）
-
-在Ubuntu或Windows的WSL2环境下构建自定义的`libqemu-system-aarch64.so`：
-
-* 安装依赖：
-
-```shell 
-sudo apt install -y build-essential cmake curl wget unzip python3 libncurses-dev \
-    git flex bison bash make autoconf libcurl4-openssl-dev tcl \
-    gettext zip pigz meson 
+```bash
+git clone https://gitcode.com/myken/codepro
+cd codepro
+# 使用 DevEco Studio 打开项目，同步依赖，编译运行
 ```
 
-* 从[华为开发者官网](https://developer.huawei.com/consumer/cn/download/)下载Linux版"Command Line Tools"
-* 解压后将`TOOL_HOME`环境变量设置为解压目录
-* 进入`deps`目录运行`make`（默认针对x86_64模拟器）：
-    * 针对真机的构建（arm64-v8a），需要执行`make aarch64`
-```shell 
-cd deps 
-make
-```
-* 构建产物位于`deps/output`目录
+### 运行
 
-## 构建Linux内核（可选）
+1. 启动 HiSH 虚拟机（确保 QGA 正常运行）
+2. 在 DevEco Studio 中点击“运行”按钮，将应用部署到鸿蒙设备
+3. 应用启动后自动进入 IDE 布局，连接 QEMU 虚拟机
 
-* 安装依赖：
+---
 
-```shell 
-sudo apt install build-essential gcc bc bison flex libssl-dev \
- libncurses5-dev libelf-dev gcc-aarch64-linux-gnu \
- clang lld llvm make 
-```
+## 📖 使用说明
 
-* 克隆Linux内核源码：
+### 1. 端口映射配置（HTML 预览必需）
 
-```shell 
-git clone --depth=1 -b v6.12 https://github.com/torvalds/linux 
-```
+在 HiSH 模拟器管理界面中，为当前模拟器添加端口映射，例如：
 
-* 下载内核配置：
+| 宿主机端口 | 虚拟机端口 |
+|------------|------------|
+| 8000       | 8000       |
 
-```shell 
-cd linux 
-curl https://raw.githubusercontent.com/harmoninux/linux-config/refs/heads/master/arm64_virt > .config 
-```
+保存并重启模拟器。
 
-* 编译内核：
+### 2. 打开文件并预览 HTML
 
-```shell
-export KCFLAGS='-march=armv8.5-a+crc+crypto+lse+rcpc+rng+sm4+sha3+dotprod+fp16 -mtune=neoverse-n1 -O2 -falign-functions=64 -fno-strict-aliasing -mllvm -vectorize-loops -mllvm -force-vector-width=2'
-env KCFLAGS="$KCFLAGS" make ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- LLVM=1 LLVM_IAS=1 menuconfig
-env KCFLAGS="$KCFLAGS" make ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- LLVM=1 LLVM_IAS=1 -j$(nproc)
-```
+- 在文件树中导航到 `/home/test.html`（或任何 `.html` 文件）
+- 点击文件打开，编辑器显示源码
+- 点击标签栏右侧的 **▶（运行）** 按钮
+- 插件会自动：
+    - 在虚拟机内启动 `python -m http.server 8000`（在文件所在目录）
+    - 打开系统浏览器访问 `http://localhost:8000/文件名.html`
+- 修改文件后，浏览器会自动刷新（热加载）
 
-* 内核镜像位于`arch/arm64/boot/Image`，复制到项目对应目录
+### 3. 终端操作
 
-## 构建Linux根文件系统（可选）
+- 标准模式下终端位于编辑器下方，可调整大小
+- 点击状态栏 ⚙ 图标可切换至“终端全屏模式”（隐藏侧边栏和编辑器）
+- 全屏模式下虚拟功能键（ESC、Fn、CTRL）自动显示
 
-以下是构建自定义根文件系统的完整流程
+### 4. 插件管理
 
-* 准备Alpine根文件系统
+点击菜单 **📂 文件 → 🔌 插件**，可查看当前已注册的所有插件及其支持的文件类型。
 
-```shell 
-# 创建目录并解压Alpine最小根文件系统 
-mkdir alpine 
-wget https://dl-cdn.alpinelinux.org/alpine/v3.22/releases/aarch64/alpine-minirootfs-3.22.1-aarch64.tar.gz 
-tar xvf alpine-minirootfs-3.22.1-aarch64.tar.gz -C alpine 
-```
+---
 
-* 创建磁盘镜像文件
+## 🔌 插件系统
 
-```shell 
-# 创建8GB大小的原始镜像文件（可根据需要调整大小）
-qemu-img create -f raw rootfs.img 8G 
- 
-# 格式化为ext4文件系统 
-mkfs.ext4 rootfs.img 
-```
+CodePro 内置了简易插件架构，允许通过实现 `IPlugin` 接口扩展功能。
 
-* 挂载并填充文件系统
+### 现有插件
 
-```shell 
-# 创建挂载点并挂载镜像 
-sudo mkdir -p /mnt/rootfs 
-sudo mount -o loop rootfs.img /mnt/rootfs 
- 
-# 复制Alpine文件系统内容 
-sudo cp -a alpine/* /mnt/rootfs/
- 
-# 卸载镜像 
-sudo umount /mnt/rootfs 
+| 插件 ID | 名称 | 支持文件 | 功能 |
+|---------|------|----------|------|
+| `html-preview` | HTML 预览 | `.html`, `.htm` | 自动启动 HTTP 服务，在浏览器中预览 |
+
+### 开发新插件
+
+1. 在 `entry/src/main/ets/plugin/` 下新建类，实现 `IPlugin` 接口
+2. 在 `PluginManager.initDefaultPlugins()` 中注册
+3. 重启应用即可在“插件管理”中看到新插件
+
+示例：
+```typescript
+export class MyPlugin implements IPlugin {
+  id = 'my-plugin';
+  name = '我的插件';
+  canHandle(filePath: string): boolean { return filePath.endsWith('.myext'); }
+  async activate(context: PluginContext, filePath: string): Promise<void> {
+    // 执行自定义逻辑
+  }
+}
 ```
 
-* 转换为qcow2格式
+---
 
-```shell 
-# 转换格式（qcow2支持动态分配空间）
-qemu-img convert -p -f raw -O qcow2 rootfs.img rootfs.qcow2 
+## ⚙️ 配置
+
+### 运行按钮显示控制
+
+通过 `entry/src/main/resources/rawfile/run_config.json` 控制哪些文件扩展名显示“运行”按钮：
+
+```json
+{
+  "extensions": [".html", ".htm"]
+}
 ```
 
-* 部署到项目
+### 端口映射默认值
 
-```shell 
-# 将生成的文件放入项目目录 
-mkdir -p entry/src/main/resources/rawfile/vm/
-mv rootfs.qcow2 entry/src/main/resources/rawfile/vm/rootfs_aarch64.qcow2 
+在 `PortMappingService` 中，如果未配置任何端口映射，会自动使用 `{ host: 8000, guest: 8000 }`。
+
+---
+
+## 🧪 故障排除
+
+### 浏览器预览失败（404）
+
+- 确认端口映射已正确配置（宿主机 → 虚拟机）
+- 确认 HTTP 服务已启动（插件会自动启动，也可手动运行 `python -m http.server 8000`）
+- 检查文件是否在 HTTP 服务根目录下
+
+### 文件树显示为空
+
+- 确认 QEMU 虚拟机已启动且 QGA 服务正常
+- 查看日志中是否有 `[QemuCoordinator] ✅ QemuAgent 获取成功`
+
+### 插件未找到
+
+- 确认插件已在 `PluginManager.initDefaultPlugins()` 中注册
+- 查看日志 `[PluginManager] 初始化默认插件` 和 `[PluginManager] Plugin registered: ...`
+
+---
+
+## 📂 项目结构（简化）
+
+```
+entry/src/main/ets/
+├── components/          # UI 组件（FileTree, EditorTabs, WebTerminal...）
+├── pages/               # 页面（IDELayout, Index）
+├── services/            # 业务服务（端口映射、文件操作、状态栏等）
+├── lib/                 # 底层库（QemuAgent, QemuFileSystem）
+├── plugin/              # 插件系统（IPlugin, PluginManager, HtmlPreviewPlugin）
+└── model/               # 数据模型（Emulator, FileNode...）
 ```
 
-# Star history
+---
 
-[![星标历史图表](https://api.star-history.com/svg?repos=harmoninux/hish&type=Date)](https://www.star-history.com/#harmoninux/hish&Date)
+## 🤝 贡献
+
+欢迎提交 Issue 和 Pull Request。请确保代码符合 ArkTS 规范，无 `any`/`unknown` 类型，并通过编译检查。
+
+---
+
+## 📄 许可证
+
+[MIT](LICENSE)
+
+---
+
+> CodePro – 让鸿蒙开发变得更简单。 🚀

@@ -1,6 +1,6 @@
 # HiSH
 
-[GitHub](https://github.com/harmoninux/HiSH) | [GitCode](https://gitcode.com/realhackeris/HiSH) | [Gitee](https://gitee.com/hackeris/HiSH) | [中文](README.md)
+[GitHub](https://github.com/harmoninux/HiSH) | [GitCode](https://gitcode.com/realhackeris/HiSH) | [Gitee](https://gitee.com/hackeris/HiSH) | [中文](README-HiSH)
 
 Run Linux Shell on HarmonyOS devices! Based on [qemu-ohos](https://github.com/harmoninux/qemu), both 2in1(PC), Tablet and Phone are supported.
 
